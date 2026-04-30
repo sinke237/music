@@ -40,7 +40,7 @@ modelscope
 # Training dependencies (required for LoRA/LoKr training)
 peft>=0.18.0
 lycoris-lora
-lightning>=2.0.0
+pytorch-lightning>=2.0.0
 tensorboard>=2.0.0
 
 # MLX dependencies (Apple Silicon native acceleration - macOS only)
