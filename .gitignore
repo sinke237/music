@@ -3,3 +3,6 @@
 *.qodo
 *.venv/
 *venv/
+*terraform.tfvars
+*aws-credentials.env
+infra/terraform_backend.conf
