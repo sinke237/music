@@ -29,6 +29,12 @@ export const config = {
   // Frontend URL
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
 
+  // Allowed CORS origins (comma-separated for production deployments)
+  // Supports: domains (suno.enowsinke.com), IPs with ports (35.156.74.21:3000)
+  allowedOrigins: process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())
+    : [],
+
   // Storage (local only)
   storage: {
     provider: 'local' as const,

@@ -57,6 +57,10 @@ app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
+    
+    // Allowed origins list (from env: comma-separated ALLOWED_ORIGINS)
+    const allowedOrigins = config.allowedOrigins;
+    
     // Allow localhost and 127.0.0.1 on any port in development
     if (config.nodeEnv === 'development') {
       if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
@@ -68,10 +72,18 @@ app.use(cors({
         return callback(null, true);
       }
     }
+    
+    // In production or when allowedOrigins is configured:
+    // Check against explicit allowed origins list
+    if (allowedOrigins.length > 0 && allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
     // In production, allow the configured frontend URL
     if (config.frontendUrl && origin === config.frontendUrl) {
       return callback(null, true);
     }
+    
     // In production, also allow requests from nginx proxy (same host, different protocol/port)
     // This handles cases where frontend is served via nginx reverse proxy
     if (config.nodeEnv === 'production') {
@@ -80,7 +92,20 @@ app.use(cors({
       if (frontendHost && (origin.includes(frontendHost) || origin === `https://${frontendHost}` || origin === `http://${frontendHost}`)) {
         return callback(null, true);
       }
+      
+      // Allow public IP access (common in cloud deployments without custom domain)
+      // Pattern: http://<any-ip>:<port> or https://<any-ip>:<port>
+      const publicIpPattern = /^https?:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/;
+      if (publicIpPattern.test(origin)) {
+        return callback(null, true);
+      }
+      
+      // Allow any origin from allowedOrigins list even in production
+      if (allowedOrigins.some(allowed => origin === allowed || origin.includes(allowed.replace(/^https?:\/\//, '')))) {
+        return callback(null, true);
+      }
     }
+    
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
