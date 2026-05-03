@@ -34,13 +34,36 @@ def get_handlers():
             device = "mps"
         else:
             device = "cpu"
+        
+        # Resolve dtype from ACESTEP_DTYPE environment variable
+        # Defaults to float16 on CUDA, float32 for pre-Ampere GPUs (T4, V100) via env var
+        dtype_str = os.environ.get('ACESTEP_DTYPE', '').lower().strip()
+        dtype_map = {
+            'float32': torch.float32,
+            'float16': torch.float16,
+            'bfloat16': torch.bfloat16,
+            'fp32': torch.float32,
+            'fp16': torch.float16,
+            'bf16': torch.bfloat16,
+        }
+        dtype = dtype_map.get(dtype_str, None)  # None lets ACE-Step auto-select
+        
+        # Log the dtype configuration
+        print(f"[simple_generate] ACESTEP_DTYPE env: '{dtype_str}' -> resolved dtype: {dtype}")
+        print(f"[simple_generate] Initializing ACE-Step on device={device}, dtype={dtype} (auto-select if None)")
+        
         _handler = AceStepHandler()
         _handler.initialize_service(
             project_root=ACESTEP_PATH,
             config_path="acestep-v15-turbo",
             device=device,
             offload_to_cpu=True,  # For 12GB GPU
+            dtype=dtype,
         )
+        
+        # Log the actual dtype being used after initialization
+        print(f"[simple_generate] ACE-Step initialized with handler.dtype={_handler.dtype}")
+        
         _llm_handler = LLMHandler()  # Create but don't initialize (not enough VRAM)
     return _handler, _llm_handler
 
