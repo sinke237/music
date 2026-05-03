@@ -4,6 +4,7 @@ import { X, Play, Pause, Download, Wand2, Image as ImageIcon, Music, Video, Load
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import { useResponsive } from '../context/ResponsiveContext';
+import { useAuth } from '../context/AuthContext';
 
 interface VideoGeneratorModalProps {
   isOpen: boolean;
@@ -104,6 +105,7 @@ function ColumnsIcon() {
 
 export const VideoGeneratorModal: React.FC<VideoGeneratorModalProps> = ({ isOpen, onClose, song, mode = 'visualizer' }) => {
   const { isMobile } = useResponsive();
+  const { token } = useAuth();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const animationRef = useRef<number>(0);
@@ -241,7 +243,9 @@ export const VideoGeneratorModal: React.FC<VideoGeneratorModalProps> = ({ isOpen
     if (wanJobId) {
       poll = setInterval(async () => {
         try {
-          const res = await fetch(`/api/wan/status/${encodeURIComponent(wanJobId)}`);
+          const res = await fetch(`/api/wan/status/${encodeURIComponent(wanJobId)}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {}
+          });
           const data = await res.json();
           setWanStatus(data.status || null);
           if (data.status === 'succeeded') {
@@ -1952,7 +1956,7 @@ export const VideoGeneratorModal: React.FC<VideoGeneratorModalProps> = ({ isOpen
             </button>
             <button
               onClick={async () => {
-                if (!song || !wanPrompt.trim()) return;
+                if (!song || !wanPrompt.trim() || !token) return;
                 setWanGenerating(true);
                 setWanStatus('submitting');
                 try {
@@ -1960,7 +1964,11 @@ export const VideoGeneratorModal: React.FC<VideoGeneratorModalProps> = ({ isOpen
                   fd.append('prompt', wanPrompt);
                   fd.append('audioUrl', song.audioUrl || '');
                   if (wanImageFile) fd.append('image', wanImageFile);
-                  const res = await fetch('/api/wan/generate', { method: 'POST', body: fd });
+                  const res = await fetch('/api/wan/generate', {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${token}` },
+                    body: fd
+                  });
                   if (!res.ok) {
                     const text = await res.text();
                     setWanStatus(`error: ${text}`);
