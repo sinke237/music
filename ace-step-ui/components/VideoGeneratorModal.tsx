@@ -1978,9 +1978,13 @@ export const VideoGeneratorModal: React.FC<VideoGeneratorModalProps> = ({ isOpen
                   const data = await res.json();
                   setWanJobId(data.jobId);
                   setWanStatus('queued');
-                } catch (err) {
-                  console.error(err);
-                  setWanStatus('error');
+                } catch (err: unknown) {
+                  console.error('Wan generate error:', err);
+                  // Provide more helpful error message for connection failures
+                  const errorMessage = err instanceof TypeError && err.message === 'Failed to fetch'
+                    ? 'Server unavailable. Please ensure the backend server is running (port 3001).'
+                    : err instanceof Error ? err.message : 'Unknown error';
+                  setWanStatus(`error: ${errorMessage}`);
                   setWanGenerating(false);
                 }
               }}

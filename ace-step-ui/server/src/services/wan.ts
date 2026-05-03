@@ -9,10 +9,12 @@ import { resolvePythonPath } from './acestep.js';
 import { config } from '../config/index.js';
 
 // GPU allocation for Wan video generation
-// ACE-Step runs on GPU 0, so Wan2.2 should use a different GPU
+// ACE-Step runs on GPU 0, so Wan2.2 should use different GPU(s)
+// Support multi-GPU allocation: can be single GPU ("1") or multiple GPUs ("1,2")
+// For S2V-14B model, we recommend at least 2 GPUs to avoid OOM
 const WAN_GPU_DEVICE = process.env.WAN_GPU_DEVICE !== undefined
   ? process.env.WAN_GPU_DEVICE
-  : '1';  // Default to GPU 1 to avoid conflict with ACE-Step on GPU 0
+  : '1,2';  // Default to GPUs 1 and 2 for S2V-14B model (needs more VRAM)
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -119,8 +121,9 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
     '--ckpt_dir', ckptDir,
     '--prompt', opts.prompt,
     '--save_file', saveFile,
-    '--offload_model', 'True',
-    '--convert_model_dtype'
+    '--offload_model', 'True',  // Offload models to CPU when not in use
+    '--convert_model_dtype',    // Convert to bf16 for lower memory
+    '--t5_cpu',                 // Keep T5 encoder on CPU to save GPU memory
   ];
 
   if (audioLocalPath) args.push('--audio', audioLocalPath);
