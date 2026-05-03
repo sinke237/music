@@ -53,6 +53,9 @@ async function ensureDir(p: string) {
 }
 
 export async function startWanJob(localJobId: string, userId: string, opts: WanJobOptions) {
+  console.log('[Wan] Starting startWanJob for:', localJobId);
+  console.log('[Wan] WAN_CKPT_DIR env:', process.env.WAN_CKPT_DIR || 'NOT SET');
+  
   // Create job output directory
   const jobDir = path.join(OUTPUT_DIR, localJobId);
   await ensureDir(jobDir);
@@ -91,9 +94,10 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
   const ckptDir = opts.ckptDir || process.env.WAN_CKPT_DIR;
   if (!ckptDir) {
     const err = 'WAN_CKPT_DIR not configured on server';
+    console.error('[Wan] ERROR:', err, 'for job:', localJobId);
     await pool.query(`UPDATE generation_jobs SET status = 'failed', error = ? WHERE id = ?`, [err, localJobId]);
     activeWanJobs.set(localJobId, { status: 'failed', error: err });
-    return;
+    throw new Error(err);
   }
 
   // Prepare process
