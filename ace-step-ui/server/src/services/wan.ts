@@ -118,6 +118,15 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
 
   // Spawn process
   try {
+    console.log('[Wan] Starting job:', localJobId);
+    console.log('[Wan] Python:', python);
+    console.log('[Wan] Working dir:', WAN_DIR);
+    console.log('[Wan] Args:', args.join(' '));
+    console.log('[Wan] Prompt:', opts.prompt);
+    console.log('[Wan] Audio:', audioLocalPath || 'none');
+    console.log('[Wan] Image:', imagePath || 'none');
+    console.log('[Wan] Output:', saveFile);
+    
     const child = spawn(python, args, { cwd: WAN_DIR, env: process.env });
 
     activeWanJobs.set(localJobId, { status: 'running', startedAt: Date.now() });
@@ -127,12 +136,12 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
     child.stdout.on('data', (data: Buffer) => {
       const s = data.toString();
       stdoutBuf += s;
+      console.log('[Wan stdout]', s.trim());
       // Look for save message
       const m = s.match(/Saving generated video to (.+)$/m);
       if (m && m[1]) {
         const saved = m[1].trim();
-        // If saved path is relative inside jobDir, expose as public URL
-        // We will still wait for exit to mark success
+        console.log('[Wan] Video saved to:', saved);
       }
     });
 
@@ -141,22 +150,30 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
     });
 
     child.on('close', async (code) => {
+      console.log('[Wan] Process exited with code:', code);
       if (code === 0) {
         // Success - check output file
         if (existsSync(saveFile)) {
           const publicUrl = `/wan-output/${localJobId}/${path.basename(saveFile)}`;
+          console.log('[Wan] Job succeeded:', localJobId, '->', publicUrl);
           await pool.query(`UPDATE generation_jobs SET status = 'succeeded', result = ?, updated_at = datetime('now') WHERE id = ?`, [JSON.stringify({ files: [publicUrl] }), localJobId]);
           activeWanJobs.set(localJobId, { status: 'succeeded', result: { files: [publicUrl] } });
         } else {
           const err = `Wan process exited but output not found: ${saveFile}`;
+          console.error('[Wan] Output file not found:', saveFile);
           await pool.query(`UPDATE generation_jobs SET status = 'failed', error = ?, updated_at = datetime('now') WHERE id = ?`, [err, localJobId]);
           activeWanJobs.set(localJobId, { status: 'failed', error: err });
         }
       } else {
         const err = `Wan process exited with code ${code}`;
+        console.error('[Wan] Job failed:', localJobId, 'code:', code);
         await pool.query(`UPDATE generation_jobs SET status = 'failed', error = ?, updated_at = datetime('now') WHERE id = ?`, [err, localJobId]);
         activeWanJobs.set(localJobId, { status: 'failed', error: err });
       }
+    });
+
+    child.on('error', (err) => {
+      console.error('[Wan] Process error:', err);
     });
   } catch (err: any) {
     console.error('Failed to spawn Wan process:', err);
