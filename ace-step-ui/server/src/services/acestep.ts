@@ -837,6 +837,9 @@ function runPythonGeneration(scriptArgs: string[], timeoutMs = 600000): Promise<
       env: {
         ...process.env,
         ACESTEP_PATH: ACESTEP_DIR,
+        // Use float32 for pre-Ampere GPUs (T4, V100, etc.) to avoid NaN/Inf overflow
+        // This can be overridden by setting ACESTEP_DTYPE in the environment
+        ACESTEP_DTYPE: process.env.ACESTEP_DTYPE || 'float32',
       },
     });
 
