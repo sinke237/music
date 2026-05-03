@@ -7,6 +7,9 @@ let connectionPromise: Promise<Client> | null = null;
 /**
  * Get a lazy-initialized Gradio client connected to the ACE-Step Gradio app.
  * Caches the connection for reuse across requests.
+ *
+ * NOTE: Uses config.acestep.gradioUrl (port 7860) NOT config.acestep.apiUrl (port 8001).
+ * The REST API and Gradio UI are separate services.
  */
 export async function getGradioClient(): Promise<Client> {
   if (clientInstance) return clientInstance;
@@ -14,14 +17,15 @@ export async function getGradioClient(): Promise<Client> {
 
   connectionPromise = (async () => {
     try {
-      const client = await Client.connect(config.acestep.apiUrl, {
+      const gradioUrl = config.acestep.gradioUrl;
+      const client = await Client.connect(gradioUrl, {
         events: ["data", "status"],
       });
       clientInstance = client;
-      console.log(`[Gradio] Connected to ${config.acestep.apiUrl}`);
+      console.log(`[Gradio] Connected to ${gradioUrl}`);
       return client;
     } catch (error) {
-      console.error(`[Gradio] Failed to connect to ${config.acestep.apiUrl}:`, error);
+      console.error(`[Gradio] Failed to connect to ${config.acestep.gradioUrl}:`, error);
       throw error;
     } finally {
       connectionPromise = null;
@@ -42,9 +46,11 @@ export function resetGradioClient(): void {
 /**
  * Check if the Gradio app is reachable.
  * Tries multiple well-known endpoints to handle version differences.
+ *
+ * NOTE: Uses config.acestep.gradioUrl (port 7860) NOT config.acestep.apiUrl (port 8001).
  */
 export async function isGradioAvailable(): Promise<boolean> {
-  const baseUrl = config.acestep.apiUrl;
+  const baseUrl = config.acestep.gradioUrl;
   const candidates = [
     `${baseUrl}/gradio_api/info`, // Gradio 5+
     `${baseUrl}/info`,            // Gradio 4.x fallback

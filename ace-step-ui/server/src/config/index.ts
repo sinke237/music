@@ -16,9 +16,12 @@ export const config = {
     path: process.env.DATABASE_PATH || path.join(__dirname, '../../data/acestep.db'),
   },
 
-  // ACE-Step API (local)
+  // ACE-Step services
   acestep: {
+    // REST API (port 8001) - for direct API calls
     apiUrl: process.env.ACESTEP_API_URL || 'http://localhost:8001',
+    // Gradio UI (port 7860) - for Gradio client connections
+    gradioUrl: process.env.ACESTEP_GRADIO_URL || 'http://localhost:7860',
   },
 
   // Pexels (optional - for video backgrounds)
