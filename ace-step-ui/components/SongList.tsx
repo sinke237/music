@@ -383,6 +383,7 @@ export const SongList: React.FC<SongListProps> = ({
                                     onToggleLike={() => onToggleLike(item.song.id)}
                                     onAddToPlaylist={() => onAddToPlaylist(item.song)}
                                     onOpenVideo={() => onOpenVideo && onOpenVideo(item.song)}
+                                    onOpenWanVideo={() => onOpenWanVideo && onOpenWanVideo(item.song)}
                                     onShowDetails={() => onShowDetails && onShowDetails(item.song)}
                                     onNavigateToProfile={onNavigateToProfile}
                                     onReusePrompt={() => onReusePrompt?.(item.song)}
@@ -436,6 +437,7 @@ interface SongItemProps {
     onToggleLike: () => void;
     onAddToPlaylist: () => void;
     onOpenVideo?: () => void;
+    onOpenWanVideo?: () => void;
     onShowDetails?: () => void;
     onNavigateToProfile?: (username: string) => void;
     onReusePrompt?: () => void;
@@ -460,6 +462,7 @@ const SongItem: React.FC<SongItemProps> = ({
     onToggleLike,
     onAddToPlaylist,
     onOpenVideo,
+    onOpenWanVideo,
     onShowDetails,
     onNavigateToProfile,
     onReusePrompt,
