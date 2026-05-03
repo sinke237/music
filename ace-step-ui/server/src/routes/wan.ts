@@ -11,18 +11,29 @@ const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 router.post('/generate', authMiddleware, upload.single('image'), async (req: AuthenticatedRequest, res: Response) => {
+  console.log('[Wan Route] POST /api/wan/generate called');
+  console.log('[Wan Route] User:', req.user?.id);
+  console.log('[Wan Route] Body:', req.body);
+  console.log('[Wan Route] File:', req.file ? { name: req.file.originalname, size: req.file.size } : null);
+  
   try {
     const prompt = (req.body.prompt || '').toString().trim();
     const audioUrl = req.body.audioUrl ? req.body.audioUrl.toString() : undefined;
     const size = req.body.size ? req.body.size.toString() : undefined;
     const task = req.body.task ? req.body.task.toString() : 's2v-14B';
 
+    console.log('[Wan Route] Prompt:', prompt);
+    console.log('[Wan Route] AudioUrl:', audioUrl);
+    console.log('[Wan Route] Task:', task);
+
     if (!prompt) {
+      console.log('[Wan Route] ERROR: Prompt is required');
       res.status(400).json({ error: 'Prompt is required' });
       return;
     }
 
     const localJobId = generateUUID();
+    console.log('[Wan Route] Created job ID:', localJobId);
     const params = { prompt, audioUrl, size, task };
 
     await pool.query(
