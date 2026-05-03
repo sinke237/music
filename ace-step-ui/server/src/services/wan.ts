@@ -8,6 +8,12 @@ import { generateUUID } from '../db/sqlite.js';
 import { resolvePythonPath } from './acestep.js';
 import { config } from '../config/index.js';
 
+// GPU allocation for Wan video generation
+// ACE-Step runs on GPU 0, so Wan2.2 should use a different GPU
+const WAN_GPU_DEVICE = process.env.WAN_GPU_DEVICE !== undefined
+  ? process.env.WAN_GPU_DEVICE
+  : '1';  // Default to GPU 1 to avoid conflict with ACE-Step on GPU 0
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -120,7 +126,14 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
   if (audioLocalPath) args.push('--audio', audioLocalPath);
   if (imagePath) args.push('--image', imagePath);
 
-  // Spawn process
+  // Spawn process with GPU selection
+  // Set CUDA_VISIBLE_DEVICES to force Wan to use a specific GPU (default: GPU 1)
+  // This avoids OOM when ACE-Step is already using GPU 0
+  const wanEnv = {
+    ...process.env,
+    CUDA_VISIBLE_DEVICES: WAN_GPU_DEVICE,
+  };
+
   try {
     console.log('[Wan] Starting job:', localJobId);
     console.log('[Wan] Python:', python);
@@ -130,8 +143,9 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
     console.log('[Wan] Audio:', audioLocalPath || 'none');
     console.log('[Wan] Image:', imagePath || 'none');
     console.log('[Wan] Output:', saveFile);
+    console.log('[Wan] CUDA_VISIBLE_DEVICES:', WAN_GPU_DEVICE);
     
-    const child = spawn(python, args, { cwd: WAN_DIR, env: process.env });
+    const child = spawn(python, args, { cwd: WAN_DIR, env: wanEnv });
 
     activeWanJobs.set(localJobId, { status: 'running', startedAt: Date.now() });
     await pool.query(`UPDATE generation_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?`, [localJobId]);
