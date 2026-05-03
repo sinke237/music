@@ -34,16 +34,17 @@ interface ReferenceTrack {
     audio_url: string;
 }
 
-export const LibraryView: React.FC<LibraryViewProps> = ({ 
+export const LibraryView: React.FC<LibraryViewProps> = ({
     allSongs,
-    likedSongs, 
-    playlists, 
+    likedSongs,
+    playlists,
     referenceTracks,
-    onPlaySong, 
+    onPlaySong,
     onCreatePlaylist,
     onSelectPlaylist,
     onAddToPlaylist,
     onOpenVideo,
+    onOpenWanVideo,
     onReusePrompt,
     onDeleteSong,
     onDeleteReferenceTrack,
