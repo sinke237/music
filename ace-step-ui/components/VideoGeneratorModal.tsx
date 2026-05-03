@@ -1805,6 +1805,199 @@ export const VideoGeneratorModal: React.FC<VideoGeneratorModalProps> = ({ isOpen
 
   if (!isOpen || !song) return null;
 
+  // WAN MODE: Simple modal with prompt, image, generate
+  if (mode === 'wan') {
+    return (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+        <div className="bg-zinc-900 rounded-2xl border border-white/10 w-full max-w-lg shadow-2xl">
+          {/* Header */}
+          <div className="flex items-center justify-between p-4 border-b border-white/10">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                <Wand2 size={20} className="text-white" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-white">Generate Video with Wan</h2>
+                <p className="text-xs text-zinc-500">AI-powered video generation</p>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+              <X size={20} className="text-zinc-400" />
+            </button>
+          </div>
+
+          {/* Song Info */}
+          <div className="p-4 border-b border-white/10">
+            <div className="flex items-center gap-3 bg-black/30 rounded-lg p-3">
+              <img
+                src={song.coverUrl || '/default-cover.png'}
+                alt={song.title}
+                className="w-12 h-12 rounded object-cover"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-white truncate">{song.title}</p>
+                <p className="text-xs text-zinc-500">{song.style}</p>
+              </div>
+              <Music size={16} className="text-zinc-500 flex-shrink-0" />
+            </div>
+          </div>
+
+          {/* Form */}
+          <div className="p-4 space-y-4">
+            {/* Prompt */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-zinc-400 uppercase">Prompt</label>
+              <textarea
+                value={wanPrompt}
+                onChange={(e) => setWanPrompt(e.target.value)}
+                placeholder="Describe the cinematic scene, mood, camera movements, and visual style..."
+                className="w-full h-32 bg-black/50 border border-white/10 rounded-lg p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-pink-500/50 resize-none"
+              />
+            </div>
+
+            {/* Image Upload */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-zinc-400 uppercase">Reference Image (Optional)</label>
+              <div className="relative">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setWanImageFile(e.target.files ? e.target.files[0] : null)}
+                  className="hidden"
+                  id="wan-image-upload"
+                />
+                <label
+                  htmlFor="wan-image-upload"
+                  className="flex items-center justify-center gap-2 w-full py-8 border-2 border-dashed border-white/10 rounded-lg cursor-pointer hover:border-white/20 hover:bg-white/5 transition-colors"
+                >
+                  {wanImageFile ? (
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={URL.createObjectURL(wanImageFile)}
+                        alt="Preview"
+                        className="w-16 h-16 rounded object-cover"
+                      />
+                      <div>
+                        <p className="text-sm text-white">{wanImageFile.name}</p>
+                        <p className="text-xs text-zinc-500">Click to change</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <ImageIcon size={24} className="mx-auto text-zinc-600 mb-2" />
+                      <p className="text-sm text-zinc-400">Drop image or click to upload</p>
+                    </div>
+                  )}
+                </label>
+                {wanImageFile && (
+                  <button
+                    onClick={() => setWanImageFile(null)}
+                    className="absolute top-2 right-2 p-1 bg-red-500/80 hover:bg-red-500 rounded-full transition-colors"
+                  >
+                    <X size={12} className="text-white" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Status */}
+            {wanStatus && (
+              <div className="bg-black/30 rounded-lg p-3 flex items-center gap-3">
+                {wanGenerating ? (
+                  <Loader2 size={16} className="text-pink-500 animate-spin" />
+                ) : wanStatus === 'succeeded' ? (
+                  <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
+                    <div className="w-2 h-2 bg-white rounded-full" />
+                  </div>
+                ) : wanStatus.includes('error') ? (
+                  <div className="w-4 h-4 rounded-full bg-red-500" />
+                ) : (
+                  <div className="w-4 h-4 rounded-full border-2 border-zinc-500 border-t-pink-500 animate-spin" />
+                )}
+                <span className="text-sm text-zinc-300 capitalize">{wanStatus.replace(/error:?\s*/i, '')}</span>
+              </div>
+            )}
+
+            {/* Results */}
+            {wanResultUrls.length > 0 && (
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-zinc-400 uppercase">Generated Videos</label>
+                {wanResultUrls.map((url, idx) => (
+                  <div key={idx} className="bg-black/30 rounded-lg overflow-hidden">
+                    <video src={url} controls className="w-full h-auto" />
+                    <div className="p-2 flex justify-end">
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs flex items-center gap-1 text-pink-400 hover:text-pink-300"
+                      >
+                        <Download size={12} />
+                        Download
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="p-4 border-t border-white/10 flex gap-3">
+            <button
+              onClick={onClose}
+              className="flex-1 py-3 rounded-lg bg-white/5 text-white font-semibold hover:bg-white/10 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={async () => {
+                if (!song || !wanPrompt.trim()) return;
+                setWanGenerating(true);
+                setWanStatus('submitting');
+                try {
+                  const fd = new FormData();
+                  fd.append('prompt', wanPrompt);
+                  fd.append('audioUrl', song.audioUrl || '');
+                  if (wanImageFile) fd.append('image', wanImageFile);
+                  const res = await fetch('/api/wan/generate', { method: 'POST', body: fd });
+                  if (!res.ok) {
+                    const text = await res.text();
+                    setWanStatus(`error: ${text}`);
+                    setWanGenerating(false);
+                    return;
+                  }
+                  const data = await res.json();
+                  setWanJobId(data.jobId);
+                  setWanStatus('queued');
+                } catch (err) {
+                  console.error(err);
+                  setWanStatus('error');
+                  setWanGenerating(false);
+                }
+              }}
+              disabled={wanGenerating || !wanPrompt.trim()}
+              className="flex-1 py-3 rounded-lg bg-gradient-to-r from-pink-500 to-purple-500 text-white font-semibold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {wanGenerating ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Wand2 size={16} />
+                  Generate Video
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // VISUALIZER MODE: Full visualizer interface
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 backdrop-blur-md p-0 md:p-4 animate-in fade-in duration-200">
 
