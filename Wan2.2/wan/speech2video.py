@@ -113,10 +113,13 @@ class WanS2V:
 
         logging.info(f"Creating WanModel from {checkpoint_dir}")
         if not dit_fsdp:
+            # Use CPU device_map when init_on_cpu is True to avoid OOM during initial load
+            # The model will be moved to GPU later in _configure_model only when needed
+            load_device_map = "cpu" if self.init_on_cpu else self.device
             self.noise_model = WanModel_S2V.from_pretrained(
                 checkpoint_dir,
                 torch_dtype=self.param_dtype,
-                device_map=self.device)
+                device_map=load_device_map)
         else:
             self.noise_model = WanModel_S2V.from_pretrained(
                 checkpoint_dir, torch_dtype=self.param_dtype)
