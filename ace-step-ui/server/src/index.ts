@@ -68,9 +68,18 @@ app.use(cors({
         return callback(null, true);
       }
     }
-    // Allow configured frontend URL
-    if (origin === config.frontendUrl) {
+    // In production, allow the configured frontend URL
+    if (config.frontendUrl && origin === config.frontendUrl) {
       return callback(null, true);
+    }
+    // In production, also allow requests from nginx proxy (same host, different protocol/port)
+    // This handles cases where frontend is served via nginx reverse proxy
+    if (config.nodeEnv === 'production') {
+      // Allow same-origin requests through nginx reverse proxy
+      const frontendHost = config.frontendUrl?.replace(/^https?:\/\//, '');
+      if (frontendHost && (origin.includes(frontendHost) || origin === `https://${frontendHost}` || origin === `http://${frontendHost}`)) {
+        return callback(null, true);
+      }
     }
     callback(new Error('Not allowed by CORS'));
   },
