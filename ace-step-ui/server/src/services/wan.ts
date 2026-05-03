@@ -14,6 +14,18 @@ const __dirname = path.dirname(__filename);
 function resolveWanPath(): string {
   const envPath = process.env.WAN_PATH;
   if (envPath) return path.isAbsolute(envPath) ? envPath : path.resolve(process.cwd(), envPath);
+  // Walk up from __dirname until we find the app root where Wan2.2 lives alongside ACE-Step-1.5
+  let dir = __dirname;
+  for (let i = 0; i < 10; i++) {
+    const candidate = path.resolve(dir, 'Wan2.2');
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // Fallback: assume tsx dev layout
   return path.resolve(__dirname, '../../../Wan2.2');
 }
 

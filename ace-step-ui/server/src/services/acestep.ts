@@ -29,12 +29,28 @@ const AUDIO_DIR = path.join(__dirname, '../../public/audio');
 const ACESTEP_API = config.acestep.apiUrl;
 
 // Resolve ACE-Step path (from env or default relative path)
-function resolveAceStepPath(): string {
+export function resolveAceStepPath(): string {
   const envPath = process.env.ACESTEP_PATH;
   if (envPath) {
     return path.isAbsolute(envPath) ? envPath : path.resolve(process.cwd(), envPath);
   }
-  // Default: sibling directory (server/src/services -> ../../../ACE-Step-1.5 = app/ACE-Step-1.5)
+  // Default: walk up from __dirname until we find the project root where ACE-Step-1.5
+  // is a sibling of the ace-step-ui directory (deployment: /opt/app/{ACE-Step-1.5, ace-step-ui})
+  //
+  // In dev (tsx):        __dirname = .../server/src/services   -> ../../.. = app/
+  // In production (dist): __dirname = .../server/dist/services -> ../../../.. = app/
+  let dir = __dirname;
+  // Walk up at most 10 levels to find the parent containing ACE-Step-1.5
+  for (let i = 0; i < 10; i++) {
+    const candidate = path.resolve(dir, 'ACE-Step-1.5');
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break; // reached filesystem root
+    dir = parent;
+  }
+  // Final fallback: assume one layout (works in dev tsx mode)
   return path.resolve(__dirname, '../../../ACE-Step-1.5');
 }
 
@@ -54,8 +70,9 @@ export function resolvePythonPath(baseDir: string): string {
     return portablePath;
   }
 
-  // Check common venv directory names (Pinokio uses 'env', others use '.venv' or 'venv')
-  const venvDirs = ['env', '.venv', 'venv'];
+  // Check common venv directory names.
+  // uv (official ACE-Step toolchain) creates '.venv', so check it first.
+  const venvDirs = ['.venv', 'env', 'venv'];
   for (const venvDir of venvDirs) {
     const venvPython = isWindows
       ? path.join(baseDir, venvDir, 'Scripts', pythonExe)
@@ -65,11 +82,11 @@ export function resolvePythonPath(baseDir: string): string {
     }
   }
 
-  // Fallback to first option (will produce a clear error if not found)
+  // Fallback to .venv (uv default) — will produce a clear ENOENT if missing
   if (isWindows) {
-    return path.join(baseDir, 'env', 'Scripts', pythonExe);
+    return path.join(baseDir, '.venv', 'Scripts', pythonExe);
   }
-  return path.join(baseDir, 'env', 'bin', 'python');
+  return path.join(baseDir, '.venv', 'bin', 'python');
 }
 
 const ACESTEP_DIR = resolveAceStepPath();
