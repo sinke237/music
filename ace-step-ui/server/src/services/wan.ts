@@ -146,9 +146,8 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
       '--ckpt_dir', ckptDir,
       '--prompt', opts.prompt,
       '--save_file', saveFile,
-      '--offload_model', 'False', // Disable offload to prevent thrashing
+      '--offload_model', 'True',  // Enable offloading to manage memory safely
       '--convert_model_dtype',    // Convert to bf16 for lower memory
-      '--t5_cpu',                 // Keep T5 encoder on CPU to save GPU memory
     ];
 
     if (audioLocalPath) args.push('--audio', audioLocalPath);
