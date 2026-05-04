@@ -153,36 +153,39 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
     if (audioLocalPath) args.push('--audio', audioLocalPath);
     if (imagePath) args.push('--image', imagePath);
 
-    // Spawn process with GPU selection
-    // Set CUDA_VISIBLE_DEVICES to force Wan to use a specific GPU(s)
-    // This avoids OOM when ACE-Step is already using GPU 0
-    const selectedGPUs = await getAvailableGPUs();
-    
-    // ENSURE IT ONLY USES GPU 1
-    const forcedGPU = '1';
-    console.log('[Wan] Job', localJobId, 'forced to GPU:', forcedGPU, '(was', selectedGPUs, ')');
-    
-    // We set LOCAL_RANK to 0 because we've mapped GPU 1 to be the only visible device (cuda:0)
+    // Use torchrun for multi-GPU parallelism
+    const nGPU = 3; // GPUs 1, 2, 3 — GPU 0 reserved for ACE-Step
+
+    const torchrunArgs = [
+      `--nproc_per_node=${nGPU}`,
+      'generate.py',
+      '--task', task,
+      '--size', size,
+      '--ckpt_dir', ckptDir,
+      '--prompt', opts.prompt,
+      '--save_file', saveFile,
+      '--dit_fsdp',            // shard DiT across the 3 GPUs
+      '--t5_fsdp',             // shard T5 across the 3 GPUs
+      '--ulysses_size', String(nGPU),
+      '--convert_model_dtype',
+    ];
+
+    if (audioLocalPath) torchrunArgs.push('--audio', audioLocalPath);
+    if (imagePath) torchrunArgs.push('--image', imagePath);
+
     const wanEnv = {
       ...process.env,
-      CUDA_VISIBLE_DEVICES: forcedGPU,
-      RANK: '0',
-      LOCAL_RANK: '0',
-      WORLD_SIZE: '1'
+      CUDA_VISIBLE_DEVICES: '1,2,3', // GPU 0 stays for ACE-Step
     };
 
     try {
       console.log('[Wan] Starting job:', localJobId);
-      console.log('[Wan] Python:', python);
       console.log('[Wan] Working dir:', WAN_DIR);
-      console.log('[Wan] Args:', args.join(' '));
+      console.log('[Wan] Args:', torchrunArgs.join(' '));
       console.log('[Wan] Env:', JSON.stringify(wanEnv));
-      console.log('[Wan] Prompt:', opts.prompt);
-      console.log('[Wan] Audio:', audioLocalPath || 'none');
-      console.log('[Wan] Image:', imagePath || 'none');
-      console.log('[Wan] Output:', saveFile);
       
-      const child = spawn(python, args, { cwd: WAN_DIR, env: wanEnv });
+      // Use 'torchrun' (needs to be available in PATH)
+      const child = spawn('torchrun', torchrunArgs, { cwd: WAN_DIR, env: wanEnv });
 
       activeWanJobs.set(localJobId, { status: 'running', startedAt: Date.now() });
       await pool.query(`UPDATE generation_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?`, [localJobId]);
