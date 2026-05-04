@@ -184,8 +184,9 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
       console.log('[Wan] Args:', torchrunArgs.join(' '));
       console.log('[Wan] Env:', JSON.stringify(wanEnv));
       
-      // Use 'torchrun' (needs to be available in PATH)
-      const child = spawn('torchrun', torchrunArgs, { cwd: WAN_DIR, env: wanEnv });
+      // Use explicit torchrun path
+      const torchrun = path.join(WAN_DIR, '.venv/bin/torchrun');
+      const child = spawn(torchrun, torchrunArgs, { cwd: WAN_DIR, env: wanEnv });
 
       activeWanJobs.set(localJobId, { status: 'running', startedAt: Date.now() });
       await pool.query(`UPDATE generation_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?`, [localJobId]);
