@@ -528,8 +528,11 @@ class WanS2V:
         # preprocess
         logging.info("Preprocessing text encoder...")
         if not self.t5_cpu:
+            logging.info("Moving text encoder to device...")
             self.text_encoder.model.to(self.device)
+            logging.info("Encoding prompt...")
             context = self.text_encoder([input_prompt], self.device)
+            logging.info("Encoding null prompt...")
             context_null = self.text_encoder([n_prompt], self.device)
             if offload_model:
                 self.text_encoder.model.cpu()
