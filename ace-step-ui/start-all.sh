@@ -55,8 +55,9 @@ mkdir -p logs
 # Start ACE-Step API in background
 echo "[1/3] Starting ACE-Step API server..."
 cd "$ACESTEP_PATH"
-uv run acestep-api --port 8001 > "../ace-step-ui/logs/api.log" 2>&1 &
+uv run acestep-api --port 8001 > "logs/api.log" 2>&1 &
 API_PID=$!
+echo $API_PID > logs/api.pid
 cd - > /dev/null
 
 # Wait for API to start

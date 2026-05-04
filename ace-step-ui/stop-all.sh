@@ -3,14 +3,19 @@
 
 echo "Stopping all ACE-Step services..."
 
-if [ -f logs/api.pid ]; then
-    API_PID=$(cat logs/api.pid)
+echo "Stopping Wan2.2 processes..."
+pkill -f "Wan2.2" || true
+
+echo "Stopping ACE-Step-1.5 API server..."
+if [ -f ../ACE-Step-1.5/logs/api.pid ]; then
+    API_PID=$(cat ../ACE-Step-1.5/logs/api.pid)
     if kill -0 $API_PID 2>/dev/null; then
         echo "Stopping API server (PID: $API_PID)..."
         kill $API_PID
     fi
-    rm logs/api.pid
+    rm ../ACE-Step-1.5/logs/api.pid
 fi
+
 
 if [ -f logs/backend.pid ]; then
     BACKEND_PID=$(cat logs/backend.pid)
