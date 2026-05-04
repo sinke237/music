@@ -376,6 +376,8 @@ class WanS2V:
                             device=self.device)))[:, :,
                                                   1:].cpu()  # for mem save
             COND.append(cond_lat)
+            del cond, cond_lat
+            torch.cuda.empty_cache()
         return COND
 
     def get_gen_size(self, size, max_area, ref_image_path, pre_video_path):
@@ -485,11 +487,13 @@ class WanS2V:
                 device=self.device)
 
         # extract audio emb
+        logging.info("Extracting audio embeddings...")
         if enable_tts is True:
             audio_path = self.tts(tts_prompt_audio, tts_prompt_text, tts_text)
         audio_emb, nr = self.encode_audio(audio_path, infer_frames=infer_frames)
         if num_repeat is None or num_repeat > nr:
             num_repeat = nr
+        logging.info(f"Audio extraction complete. Clips to generate: {num_repeat}")
 
         lat_motion_frames = (self.motion_frames + 3) // 4
         model_pic = crop_opreat(resize_opreat(Image.fromarray(ref_image)))
@@ -522,12 +526,16 @@ class WanS2V:
             n_prompt = self.sample_neg_prompt
 
         # preprocess
+        logging.info("Preprocessing text encoder...")
         if not self.t5_cpu:
             self.text_encoder.model.to(self.device)
             context = self.text_encoder([input_prompt], self.device)
             context_null = self.text_encoder([n_prompt], self.device)
             if offload_model:
                 self.text_encoder.model.cpu()
+                torch.cuda.empty_cache()
+                gc.collect()
+                logging.info("Text encoder offloaded to CPU.")
         else:
             context = self.text_encoder([input_prompt], torch.device('cpu'))
             context_null = self.text_encoder([n_prompt], torch.device('cpu'))
@@ -541,6 +549,7 @@ class WanS2V:
                 torch.no_grad(),
         ):
             for r in range(num_repeat):
+                logging.info(f"Starting generation for clip {r + 1}/{num_repeat}...")
                 seed_g = torch.Generator(device=self.device)
                 seed_g.manual_seed(seed + r)
 
@@ -653,7 +662,15 @@ class WanS2V:
                     decode_latents = torch.cat([motion_latents, latents], dim=2)
                 else:
                     decode_latents = torch.cat([ref_latents, latents], dim=2)
+                
+                # Explicitly ensure decode_latents is on GPU before decoding
+                decode_latents = decode_latents.to(device=self.device)
                 image = torch.stack(self.vae.decode(decode_latents))
+                
+                # Cleanup decode latents
+                del decode_latents
+                torch.cuda.empty_cache()
+
                 image = image[:, :, -(infer_frames):]
                 if (drop_first_motion and r == 0):
                     image = image[:, :, 3:]
@@ -669,6 +686,9 @@ class WanS2V:
                 motion_latents = torch.stack(
                     self.vae.encode(videos_last_frames))
                 out.append(image.cpu())
+                del image, videos_last_frames
+                torch.cuda.empty_cache()
+                gc.collect()
 
         videos = torch.cat(out, dim=2)
         del noise, latents
