@@ -7,14 +7,37 @@ import { pool } from '../db/pool.js';
 import { generateUUID } from '../db/sqlite.js';
 import { resolvePythonPath } from './acestep.js';
 import { config } from '../config/index.js';
+import { runWithGpuLock } from './gpu-lock.js';
 
 // GPU allocation for Wan video generation
 // ACE-Step runs on GPU 0, so Wan2.2 should use different GPU(s)
-// Support multi-GPU allocation: can be single GPU ("1") or multiple GPUs ("1,2")
-// For S2V-14B model, we recommend at least 2 GPUs to avoid OOM
-const WAN_GPU_DEVICE = process.env.WAN_GPU_DEVICE !== undefined
-  ? process.env.WAN_GPU_DEVICE
-  : '1,2';  // Default to GPUs 1 and 2 for S2V-14B model (needs more VRAM)
+// We dynamically select GPUs based on current memory usage to avoid OOM
+
+async function getAvailableGPUs(): Promise<string> {
+  try {
+    const { execSync } = await import('child_process');
+    const output = execSync('nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader').toString();
+    const gpus = output.trim().split('\n').map(line => {
+      const [index, used, total] = line.split(',').map(s => s.trim());
+      return {
+        index: parseInt(index),
+        used: parseInt(used.replace(' MiB', '')),
+        total: parseInt(total.replace(' MiB', ''))
+      };
+    });
+
+    // Assume ACE-Step uses GPU 0, so we ignore it
+    // Find GPUs with plenty of free memory (e.g., > 18GB free)
+    const available = gpus
+      .filter(g => g.index > 0 && (g.total - g.used) > 18000)
+      .map(g => g.index.toString());
+
+    return available.length > 0 ? available.join(',') : '1,2,3'; // Fallback
+  } catch (e) {
+    console.error('Failed to detect GPUs, using default', e);
+    return '1,2,3';
+  }
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -61,12 +84,13 @@ async function ensureDir(p: string) {
 }
 
 export async function startWanJob(localJobId: string, userId: string, opts: WanJobOptions) {
-  console.log('[Wan] Starting startWanJob for:', localJobId);
-  console.log('[Wan] WAN_CKPT_DIR env:', process.env.WAN_CKPT_DIR || 'NOT SET');
-  
-  // Create job output directory
-  const jobDir = path.join(OUTPUT_DIR, localJobId);
-  await ensureDir(jobDir);
+  return runWithGpuLock(async () => {
+    console.log('[Wan] Starting startWanJob for:', localJobId);
+    console.log('[Wan] WAN_CKPT_DIR env:', process.env.WAN_CKPT_DIR || 'NOT SET');
+    
+    // Create job output directory
+    const jobDir = path.join(OUTPUT_DIR, localJobId);
+    await ensureDir(jobDir);
 
   // Save optional image
   let imagePath: string | null = null;
@@ -130,11 +154,12 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
   if (imagePath) args.push('--image', imagePath);
 
   // Spawn process with GPU selection
-  // Set CUDA_VISIBLE_DEVICES to force Wan to use a specific GPU (default: GPU 1)
+  // Set CUDA_VISIBLE_DEVICES to force Wan to use a specific GPU(s)
   // This avoids OOM when ACE-Step is already using GPU 0
+  const selectedGPUs = await getAvailableGPUs();
   const wanEnv = {
     ...process.env,
-    CUDA_VISIBLE_DEVICES: WAN_GPU_DEVICE,
+    CUDA_VISIBLE_DEVICES: selectedGPUs,
   };
 
   try {
@@ -146,7 +171,7 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
     console.log('[Wan] Audio:', audioLocalPath || 'none');
     console.log('[Wan] Image:', imagePath || 'none');
     console.log('[Wan] Output:', saveFile);
-    console.log('[Wan] CUDA_VISIBLE_DEVICES:', WAN_GPU_DEVICE);
+    console.log('[Wan] CUDA_VISIBLE_DEVICES:', selectedGPUs);
     
     const child = spawn(python, args, { cwd: WAN_DIR, env: wanEnv });
 
@@ -201,6 +226,7 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
     await pool.query(`UPDATE generation_jobs SET status = 'failed', error = ?, updated_at = datetime('now') WHERE id = ?`, [String(err || 'spawn error'), localJobId]);
     activeWanJobs.set(localJobId, { status: 'failed', error: String(err || 'spawn error') });
   }
+  });
 }
 
 export async function getWanJobStatus(localJobId: string) {
