@@ -93,142 +93,149 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
     const jobDir = path.join(OUTPUT_DIR, localJobId);
     await ensureDir(jobDir);
 
-  // Save optional image
-  let imagePath: string | null = null;
-  if (opts.imageBuffer) {
-    const name = opts.imageName || 'input_image.jpg';
-    imagePath = path.join(jobDir, name.replace(/[^a-zA-Z0-9_.-]/g, '_'));
-    await writeFile(imagePath, opts.imageBuffer);
-  }
-
-  // Resolve audio: if URL remote, download; if /audio/ path, resolve to public audio dir
-  let audioLocalPath: string | undefined = undefined;
-  if (opts.audioUrl) {
-    if (opts.audioUrl.startsWith('/audio/')) {
-      audioLocalPath = path.join(__dirname, '../../public/audio', opts.audioUrl.replace('/audio/', ''));
-    } else if (opts.audioUrl.startsWith('http://') || opts.audioUrl.startsWith('https://')) {
-      try {
-        const res = await fetch(opts.audioUrl);
-        if (res.ok) {
-          const buf = Buffer.from(await res.arrayBuffer());
-          const ext = path.extname(new URL(opts.audioUrl).pathname) || '.mp3';
-          audioLocalPath = path.join(jobDir, `input_audio${ext}`);
-          await writeFile(audioLocalPath, buf);
-        }
-      } catch (err) {
-        console.warn('Failed to download remote audio for Wan job:', err);
-      }
-    } else {
-      audioLocalPath = opts.audioUrl;
+    // Save optional image
+    let imagePath: string | null = null;
+    if (opts.imageBuffer) {
+      const name = opts.imageName || 'input_image.jpg';
+      imagePath = path.join(jobDir, name.replace(/[^a-zA-Z0-9_.-]/g, '_'));
+      await writeFile(imagePath, opts.imageBuffer);
     }
-  }
 
-  // Ensure checkpoint dir configured
-  const ckptDir = opts.ckptDir || process.env.WAN_CKPT_DIR;
-  if (!ckptDir) {
-    const err = 'WAN_CKPT_DIR not configured on server';
-    console.error('[Wan] ERROR:', err, 'for job:', localJobId);
-    await pool.query(`UPDATE generation_jobs SET status = 'failed', error = ? WHERE id = ?`, [err, localJobId]);
-    activeWanJobs.set(localJobId, { status: 'failed', error: err });
-    throw new Error(err);
-  }
-
-  // Prepare process
-  const python = resolvePythonPath(WAN_DIR);
-  const saveFile = path.join(jobDir, `${localJobId}.mp4`);
-  const task = opts.task || 's2v-14B';
-  const size = opts.size || '1024*704';
-
-  const args: string[] = [
-    'generate.py',
-    '--task', task,
-    '--size', size,
-    '--ckpt_dir', ckptDir,
-    '--prompt', opts.prompt,
-    '--save_file', saveFile,
-    '--offload_model', 'True',  // Offload models to CPU when not in use
-    '--convert_model_dtype',    // Convert to bf16 for lower memory
-    '--t5_cpu',                 // Keep T5 encoder on CPU to save GPU memory
-  ];
-
-  if (audioLocalPath) args.push('--audio', audioLocalPath);
-  if (imagePath) args.push('--image', imagePath);
-
-  // Spawn process with GPU selection
-  // Set CUDA_VISIBLE_DEVICES to force Wan to use a specific GPU(s)
-  // This avoids OOM when ACE-Step is already using GPU 0
-  const selectedGPUs = await getAvailableGPUs();
-  console.log('[Wan] Job', localJobId, 'assigned to GPUs:', selectedGPUs);
-  const wanEnv = {
-    ...process.env,
-    CUDA_VISIBLE_DEVICES: selectedGPUs,
-  };
-
-  try {
-    console.log('[Wan] Starting job:', localJobId);
-    console.log('[Wan] Python:', python);
-    console.log('[Wan] Working dir:', WAN_DIR);
-    console.log('[Wan] Args:', args.join(' '));
-    console.log('[Wan] Prompt:', opts.prompt);
-    console.log('[Wan] Audio:', audioLocalPath || 'none');
-    console.log('[Wan] Image:', imagePath || 'none');
-    console.log('[Wan] Output:', saveFile);
-    console.log('[Wan] CUDA_VISIBLE_DEVICES:', selectedGPUs);
-    
-    const child = spawn(python, args, { cwd: WAN_DIR, env: wanEnv });
-
-    activeWanJobs.set(localJobId, { status: 'running', startedAt: Date.now() });
-    await pool.query(`UPDATE generation_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?`, [localJobId]);
-
-    let stdoutBuf = '';
-    child.stdout.on('data', (data: Buffer) => {
-      const s = data.toString();
-      stdoutBuf += s;
-      console.log('[Wan stdout]', s.trim());
-      // Look for save message
-      const m = s.match(/Saving generated video to (.+)$/m);
-      if (m && m[1]) {
-        const saved = m[1].trim();
-        console.log('[Wan] Video saved to:', saved);
+    // Resolve audio: if URL remote, download; if /audio/ path, resolve to public audio dir
+    let audioLocalPath: string | undefined = undefined;
+    if (opts.audioUrl) {
+      if (opts.audioUrl.startsWith('/audio/')) {
+        audioLocalPath = path.join(__dirname, '../../public/audio', opts.audioUrl.replace('/audio/', ''));
+      } else if (opts.audioUrl.startsWith('http://') || opts.audioUrl.startsWith('https://')) {
+        try {
+          const res = await fetch(opts.audioUrl);
+          if (res.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            const ext = path.extname(new URL(opts.audioUrl).pathname) || '.mp3';
+            audioLocalPath = path.join(jobDir, `input_audio${ext}`);
+            await writeFile(audioLocalPath, buf);
+          }
+        } catch (err) {
+          console.warn('Failed to download remote audio for Wan job:', err);
+        }
+      } else {
+        audioLocalPath = opts.audioUrl;
       }
-    });
+    }
 
-    child.stderr.on('data', (data: Buffer) => {
-      console.error('[Wan stderr]', data.toString());
-    });
+    // Ensure checkpoint dir configured
+    const ckptDir = opts.ckptDir || process.env.WAN_CKPT_DIR;
+    if (!ckptDir) {
+      const err = 'WAN_CKPT_DIR not configured on server';
+      console.error('[Wan] ERROR:', err, 'for job:', localJobId);
+      await pool.query(`UPDATE generation_jobs SET status = 'failed', error = ? WHERE id = ?`, [err, localJobId]);
+      activeWanJobs.set(localJobId, { status: 'failed', error: err });
+      throw new Error(err);
+    }
 
-    child.on('close', async (code) => {
-      console.log('[Wan] Process exited with code:', code);
-      if (code === 0) {
-        // Success - check output file
-        if (existsSync(saveFile)) {
-          const publicUrl = `/wan-output/${localJobId}/${path.basename(saveFile)}`;
-          console.log('[Wan] Job succeeded:', localJobId, '->', publicUrl);
-          await pool.query(`UPDATE generation_jobs SET status = 'succeeded', result = ?, updated_at = datetime('now') WHERE id = ?`, [JSON.stringify({ files: [publicUrl] }), localJobId]);
-          activeWanJobs.set(localJobId, { status: 'succeeded', result: { files: [publicUrl] } });
+    // Prepare process
+    const python = resolvePythonPath(WAN_DIR);
+    const saveFile = path.join(jobDir, `${localJobId}.mp4`);
+    const task = opts.task || 's2v-14B';
+    const size = opts.size || '1024*704';
+
+    const args: string[] = [
+      'generate.py',
+      '--task', task,
+      '--size', size,
+      '--ckpt_dir', ckptDir,
+      '--prompt', opts.prompt,
+      '--save_file', saveFile,
+      '--offload_model', 'False', // Disable offload to prevent thrashing
+      '--convert_model_dtype',    // Convert to bf16 for lower memory
+      '--t5_cpu',                 // Keep T5 encoder on CPU to save GPU memory
+    ];
+
+    if (audioLocalPath) args.push('--audio', audioLocalPath);
+    if (imagePath) args.push('--image', imagePath);
+
+    // Spawn process with GPU selection
+    // Set CUDA_VISIBLE_DEVICES to force Wan to use a specific GPU(s)
+    // This avoids OOM when ACE-Step is already using GPU 0
+    const selectedGPUs = await getAvailableGPUs();
+    
+    // ENSURE IT ONLY USES GPU 1
+    const forcedGPU = '1';
+    console.log('[Wan] Job', localJobId, 'forced to GPU:', forcedGPU, '(was', selectedGPUs, ')');
+    
+    // We set LOCAL_RANK to 0 because we've mapped GPU 1 to be the only visible device (cuda:0)
+    const wanEnv = {
+      ...process.env,
+      CUDA_VISIBLE_DEVICES: forcedGPU,
+      RANK: '0',
+      LOCAL_RANK: '0',
+      WORLD_SIZE: '1'
+    };
+
+    try {
+      console.log('[Wan] Starting job:', localJobId);
+      console.log('[Wan] Python:', python);
+      console.log('[Wan] Working dir:', WAN_DIR);
+      console.log('[Wan] Args:', args.join(' '));
+      console.log('[Wan] Env:', JSON.stringify(wanEnv));
+      console.log('[Wan] Prompt:', opts.prompt);
+      console.log('[Wan] Audio:', audioLocalPath || 'none');
+      console.log('[Wan] Image:', imagePath || 'none');
+      console.log('[Wan] Output:', saveFile);
+      
+      const child = spawn(python, args, { cwd: WAN_DIR, env: wanEnv });
+
+      activeWanJobs.set(localJobId, { status: 'running', startedAt: Date.now() });
+      await pool.query(`UPDATE generation_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?`, [localJobId]);
+
+      let stdoutBuf = '';
+      child.stdout.on('data', (data: Buffer) => {
+        const s = data.toString();
+        stdoutBuf += s;
+        // Log every step clearly
+        s.split('\n').forEach(line => {
+          if (line.trim()) {
+            console.log(`[Wan Progress] ${line.trim()}`);
+          }
+        });
+      });
+  
+      child.stderr.on('data', (data: Buffer) => {
+        console.error('[Wan Error/Log]', data.toString().trim());
+      });
+
+      child.on('close', async (code) => {
+        console.log('[Wan] Process exited with code:', code);
+        if (code === 0) {
+          // Success - check output file
+          if (existsSync(saveFile)) {
+            const publicUrl = `/wan-output/${localJobId}/${path.basename(saveFile)}`;
+            console.log('[Wan] Job succeeded:', localJobId, '->', publicUrl);
+            await pool.query(`UPDATE generation_jobs SET status = 'succeeded', result = ?, updated_at = datetime('now') WHERE id = ?`, [JSON.stringify({ files: [publicUrl] }), localJobId]);
+            activeWanJobs.set(localJobId, { status: 'succeeded', result: { files: [publicUrl] } });
+          } else {
+            const err = `Wan process exited but output not found: ${saveFile}`;
+            console.error('[Wan] Output file not found:', saveFile);
+            await pool.query(`UPDATE generation_jobs SET status = 'failed', error = ?, updated_at = datetime('now') WHERE id = ?`, [err, localJobId]);
+            activeWanJobs.set(localJobId, { status: 'failed', error: err });
+          }
         } else {
-          const err = `Wan process exited but output not found: ${saveFile}`;
-          console.error('[Wan] Output file not found:', saveFile);
+          const err = `Wan process exited with code ${code}`;
+          console.error('[Wan] Job failed:', localJobId, 'code:', code);
           await pool.query(`UPDATE generation_jobs SET status = 'failed', error = ?, updated_at = datetime('now') WHERE id = ?`, [err, localJobId]);
           activeWanJobs.set(localJobId, { status: 'failed', error: err });
         }
-      } else {
-        const err = `Wan process exited with code ${code}`;
-        console.error('[Wan] Job failed:', localJobId, 'code:', code);
-        await pool.query(`UPDATE generation_jobs SET status = 'failed', error = ?, updated_at = datetime('now') WHERE id = ?`, [err, localJobId]);
-        activeWanJobs.set(localJobId, { status: 'failed', error: err });
-      }
-    });
+      });
 
-    child.on('error', (err) => {
-      console.error('[Wan] Process error:', err);
-    });
-  } catch (err: any) {
-    console.error('Failed to spawn Wan process:', err);
-    await pool.query(`UPDATE generation_jobs SET status = 'failed', error = ?, updated_at = datetime('now') WHERE id = ?`, [String(err || 'spawn error'), localJobId]);
-    activeWanJobs.set(localJobId, { status: 'failed', error: String(err || 'spawn error') });
-  }
-  console.log('[Wan] Job', localJobId, 'released lock');
+      child.on('error', (err) => {
+        console.error('[Wan] Process error:', err);
+      });
+    } catch (err: any) {
+      console.error('Failed to spawn Wan process:', err);
+      await pool.query(`UPDATE generation_jobs SET status = 'failed', error = ?, updated_at = datetime('now') WHERE id = ?`, [String(err || 'spawn error'), localJobId]);
+      activeWanJobs.set(localJobId, { status: 'failed', error: String(err || 'spawn error') });
+    }
+    console.log('[Wan] Job', localJobId, 'released lock');
   });
 }
 
