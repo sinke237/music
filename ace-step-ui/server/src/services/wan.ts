@@ -85,6 +85,7 @@ async function ensureDir(p: string) {
 
 export async function startWanJob(localJobId: string, userId: string, opts: WanJobOptions) {
   return runWithGpuLock(async () => {
+    console.log('[Wan] Job', localJobId, 'acquired lock');
     console.log('[Wan] Starting startWanJob for:', localJobId);
     console.log('[Wan] WAN_CKPT_DIR env:', process.env.WAN_CKPT_DIR || 'NOT SET');
     
@@ -157,6 +158,7 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
   // Set CUDA_VISIBLE_DEVICES to force Wan to use a specific GPU(s)
   // This avoids OOM when ACE-Step is already using GPU 0
   const selectedGPUs = await getAvailableGPUs();
+  console.log('[Wan] Job', localJobId, 'assigned to GPUs:', selectedGPUs);
   const wanEnv = {
     ...process.env,
     CUDA_VISIBLE_DEVICES: selectedGPUs,
@@ -226,6 +228,7 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
     await pool.query(`UPDATE generation_jobs SET status = 'failed', error = ?, updated_at = datetime('now') WHERE id = ?`, [String(err || 'spawn error'), localJobId]);
     activeWanJobs.set(localJobId, { status: 'failed', error: String(err || 'spawn error') });
   }
+  console.log('[Wan] Job', localJobId, 'released lock');
   });
 }
 
