@@ -526,13 +526,18 @@ function AppContent() {
     };
 
     const onError = (e: Event) => {
-      if (audio.error && audio.error.code !== 1) {
-        console.error("Audio playback error:", audio.error);
-        if (audio.error.code === 4) {
-          showToast(t('songNotAvailable'), 'error');
-        } else {
-          showToast(t('unableToPlay'), 'error');
-        }
+      // Ignore empty src errors (code 4) - this is expected when no song is loaded yet
+      if (!audio.error) return;
+      if (audio.error.code === 1) return; // MEDIA_ERR_ABORTED - user aborted, ignore
+      if (audio.error.code === 4 && !audio.src) {
+        // Empty src attribute - expected on initial load before any song is selected
+        return;
+      }
+      console.error("Audio playback error:", audio.error);
+      if (audio.error.code === 4) {
+        showToast(t('songNotAvailable'), 'error');
+      } else {
+        showToast(t('unableToPlay'), 'error');
       }
       setIsPlaying(false);
     };
