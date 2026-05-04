@@ -526,14 +526,15 @@ class WanS2V:
             n_prompt = self.sample_neg_prompt
 
         # preprocess
-        logging.info("Preprocessing text encoder...")
+        logging.info(f"Preprocessing text encoder (device: {self.device})...")
         if not self.t5_cpu:
             logging.info("Moving text encoder to device...")
             self.text_encoder.model.to(self.device)
-            logging.info("Encoding prompt...")
+            logging.info(f"Encoding prompt (len: {len(input_prompt)})...")
             context = self.text_encoder([input_prompt], self.device)
             logging.info("Encoding null prompt...")
             context_null = self.text_encoder([n_prompt], self.device)
+            logging.info("Text encoder encoding complete.")
             if offload_model:
                 self.text_encoder.model.cpu()
                 torch.cuda.empty_cache()
