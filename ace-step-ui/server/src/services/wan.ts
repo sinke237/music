@@ -154,18 +154,19 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
     if (imagePath) args.push('--image', imagePath);
 
     // Use torchrun for multi-GPU parallelism
-    const nGPU = 3; // GPUs 1, 2, 3 — GPU 0 reserved for ACE-Step
+    const nGPU = 2; // Use 2 GPUs (1, 2) since 3 does not divide 40 heads
 
     const torchrunArgs = [
       `--nproc_per_node=${nGPU}`,
+      '--standalone',
       'generate.py',
       '--task', task,
       '--size', size,
       '--ckpt_dir', ckptDir,
       '--prompt', opts.prompt,
       '--save_file', saveFile,
-      '--dit_fsdp',            // shard DiT across the 3 GPUs
-      '--t5_fsdp',             // shard T5 across the 3 GPUs
+      '--dit_fsdp',            // shard DiT across the GPUs
+      '--t5_fsdp',             // shard T5 across the GPUs
       '--ulysses_size', String(nGPU),
       '--convert_model_dtype',
     ];
@@ -175,7 +176,7 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
 
     const wanEnv = {
       ...process.env,
-      CUDA_VISIBLE_DEVICES: '1,2,3', // GPU 0 stays for ACE-Step
+      CUDA_VISIBLE_DEVICES: '1,2', // Use only 2 GPUs, GPU 0 reserved for ACE-Step
     };
 
     try {
