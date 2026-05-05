@@ -154,8 +154,17 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
     if (imagePath) args.push('--image', imagePath);
 
     // Use torchrun for multi-GPU parallelism
-    const nGPU = 2; // Use 2 GPUs (1, 2) since 3 does not divide 40 heads
+    // Read WAN_GPU_DEVICE from environment (e.g., "1,2,3" or "1,2,3,4,5,6,7")
+    // GPU 0 is reserved for ACE-Step. p4de.24xlarge has 8x A100 80GB.
+    const wanGpuDevice = process.env.WAN_GPU_DEVICE || '1,2';
+    const gpuList = wanGpuDevice.split(',').map(g => g.trim()).filter(g => g.length > 0);
+    const nGPU = gpuList.length;
+    const cudaVisibleDevices = gpuList.join(',');
 
+    console.log(`[Wan] Using GPUs: ${cudaVisibleDevices} (${nGPU} GPU${nGPU > 1 ? 's' : ''})`);
+
+    // Wan2.2 uses FSDP which handles sharding across all specified GPUs.
+    // ulysses_size should match the number of GPUs for sequence parallelism.
     const torchrunArgs = [
       `--nproc_per_node=${nGPU}`,
       '--standalone',
@@ -176,7 +185,7 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
 
     const wanEnv = {
       ...process.env,
-      CUDA_VISIBLE_DEVICES: '1,2', // Use only 2 GPUs, GPU 0 reserved for ACE-Step
+      CUDA_VISIBLE_DEVICES: cudaVisibleDevices,
     };
 
     try {
