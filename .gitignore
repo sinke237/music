@@ -3,6 +3,22 @@
 *.qodo
 *.venv/
 *venv/
+
+# Terraform
 *terraform.tfvars
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+terraform_backend.conf
+
+# Infrastructure
 *aws-credentials.env
-infra/terraform_backend.conf
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/.terraform.lock.hcl
+infra/.ec2_ip
+*.pem
+*.pub
