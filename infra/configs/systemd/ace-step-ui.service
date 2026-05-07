@@ -1,0 +1,38 @@
+[Unit]
+Description=ACE-Step UI Frontend Server
+Documentation=https://github.com/sinke237/music
+After=network.target network-online.target ace-step-1.5.service wan22.service
+Wants=network-online.target
+Requires=ace-step-1.5.service
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/app/music/ace-step-ui
+Environment="NODE_ENV=production"
+Environment="PORT=3001"
+Environment="ACESTEP_API_URL=http://127.0.0.1:8001"
+Environment="WAN22_API_URL=http://127.0.0.1:8080"
+
+ExecStartPre=/bin/sleep 10
+ExecStart=/usr/bin/npm start
+
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+StandardOutput=append:/opt/logs/ace-step-ui.log
+StandardError=append:/opt/logs/ace-step-ui-error.log
+
+MemoryHigh=8G
+MemoryMax=10G
+
+CPUWeight=50
+IOWeight=50
+
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

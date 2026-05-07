@@ -1,0 +1,36 @@
+[Unit]
+Description=Wan2.2 Video Generation API Server
+Documentation=https://github.com/sinke237/music
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/app/music/Wan2.2
+Environment="CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7"
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+
+ExecStartPre=/bin/sleep 5
+ExecStart=/opt/app/music/Wan2.2/.venv/bin/python api_server.py --host 127.0.0.1 --port 8080 --ckpt-dir /opt/models/Wan2.2-T2V-A14B --default-size 1280x720
+
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=1200
+TimeoutStopSec=300
+
+StandardOutput=append:/opt/logs/wan22.log
+StandardError=append:/opt/logs/wan22-error.log
+
+MemoryHigh=500G
+MemoryMax=520G
+
+CPUWeight=90
+IOWeight=90
+
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

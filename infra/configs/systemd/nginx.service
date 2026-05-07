@@ -1,0 +1,17 @@
+[Unit]
+Description=Nginx HTTP Server (API Gateway)
+Documentation=https://nginx.org/en/docs/
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+PIDFile=/run/nginx.pid
+ExecStartPre=/usr/sbin/nginx -t
+ExecStart=/usr/sbin/nginx
+ExecReload=/bin/kill -s HUP $MAINPID
+ExecStop=/bin/kill -s QUIT $MAINPID
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

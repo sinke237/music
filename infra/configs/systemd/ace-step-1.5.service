@@ -1,0 +1,52 @@
+[Unit]
+Description=ACE-Step 1.5 Music Generation API Server
+Documentation=https://github.com/sinke237/music
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/app/music/ACE-Step-1.5
+
+# GPU Configuration
+Environment="CUDA_VISIBLE_DEVICES=0"
+
+# Model Configuration - BEST QUALITY
+# Using XL-SFT (4B) for maximum quality
+Environment="ACESTEP_INIT_LLM=auto"
+Environment="ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-4B"
+Environment="ACESTEP_CONFIG_PATH=acestep-v15-xl-sft"
+Environment="ACESTEP_DOWNLOAD_SOURCE=auto"
+
+# Persistent models storage
+Environment="ACESTEP_CHECKPOINTS_DIR=/opt/models/acestep"
+
+# Server Configuration
+Environment="PORT=8001"
+Environment="SERVER_NAME=127.0.0.1"
+Environment="HOST=127.0.0.1"
+
+ExecStartPre=/bin/bash -c 'source /home/ec2-user/.bashrc && export PATH="$HOME/.local/bin:$PATH"'
+ExecStart=/home/ec2-user/.local/bin/uv run acestep-api --host 127.0.0.1 --port 8001 --enable-api --backend pt --server-name 127.0.0.1
+
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=600
+TimeoutStopSec=120
+
+StandardOutput=append:/opt/logs/ace-step-1.5.log
+StandardError=append:/opt/logs/ace-step-1.5-error.log
+
+# Resource Limits (for A100 80GB)
+MemoryHigh=80G
+MemoryMax=85G
+
+CPUWeight=80
+IOWeight=80
+
+Nice=0
+
+[Install]
+WantedBy=multi-user.target
