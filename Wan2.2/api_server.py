@@ -10,7 +10,8 @@ This server provides REST API endpoints for:
 
 GPU Configuration:
 - Uses CUDA_VISIBLE_DEVICES environment variable
-- Defaults to GPUs 1-7 for p4de.24xlarge (8x A100 80GB)
+- Defaults to GPU 0 for g5.4xlarge (1x A10G 24GB)
+- Wan2.2-14B-GGUF (Q6_K) runs in ~12-14GB VRAM
 """
 
 import argparse

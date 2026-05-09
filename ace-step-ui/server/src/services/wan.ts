@@ -153,10 +153,10 @@ export async function startWanJob(localJobId: string, userId: string, opts: WanJ
     if (audioLocalPath) args.push('--audio', audioLocalPath);
     if (imagePath) args.push('--image', imagePath);
 
-    // Use torchrun for multi-GPU parallelism
-    // Read WAN_GPU_DEVICE from environment (e.g., "1,2,3" or "1,2,3,4,5,6,7")
-    // GPU 0 is reserved for ACE-Step. p4de.24xlarge has 8x A100 80GB.
-    const wanGpuDevice = process.env.WAN_GPU_DEVICE || '1,2';
+    // Use torchrun for GPU inference
+    // Read WAN_GPU_DEVICE from environment (defaults to "0" for single GPU)
+    // g5.4xlarge has 1x A10G 24GB - Wan2.2-14B-GGUF runs on GPU 0
+    const wanGpuDevice = process.env.WAN_GPU_DEVICE || '0';
     const gpuList = wanGpuDevice.split(',').map(g => g.trim()).filter(g => g.length > 0);
     const nGPU = gpuList.length;
     const cudaVisibleDevices = gpuList.join(',');
