@@ -11,9 +11,9 @@ variable "aws_region" {
 
 # Instance Configuration
 variable "instance_type" {
-  description = "EC2 instance type for GPU instances"
+  description = "EC2 instance type for GPU instance"
   type        = string
-  default     = "g5.48xlarge"
+  default     = "g5.4xlarge"
 }
 
 variable "ami_id" {
@@ -22,17 +22,7 @@ variable "ami_id" {
   default     = "ami-0b3eebcd4111d5b5d"
 }
 
-variable "ace_instance_count" {
-  description = "Number of instances for ACE-Step service"
-  type        = number
-  default     = 1
-}
 
-variable "wan_instance_count" {
-  description = "Number of instances for Wan2.2 distributed inference"
-  type        = number
-  default     = 3
-}
 
 variable "models_volume_size" {
   description = "Size in GB for persistent models volume (NOT destroyed by default)"
@@ -41,9 +31,9 @@ variable "models_volume_size" {
 }
 
 variable "use_single_instance" {
-  description = "Deploy all services on a single instance (p4de mode)"
+  description = "Deploy all services on a single instance"
   type        = bool
-  default     = false
+  default     = true
 }
 
 # VPC Configuration
@@ -82,7 +72,7 @@ variable "key_name" {
 variable "public_key_path" {
   description = "Path to public key file"
   type        = string
-  default     = "../keys/ema-practice.pub"
+  default     = "keys/ema-practice.pub"
 }
 
 variable "private_key_path" {
@@ -122,4 +112,23 @@ variable "s3_bucket_arn" {
   description = "S3 bucket ARN for model storage (optional)"
   type        = string
   default     = ""
+}
+
+# Import existing resources (set to true if resources already exist in AWS)
+variable "import_existing_key_pair" {
+  description = "Set to true if key pair already exists in AWS"
+  type        = bool
+  default     = false
+}
+
+variable "import_existing_iam_role" {
+  description = "Set to true if IAM role already exists in AWS"
+  type        = bool
+  default     = false
+}
+
+variable "import_existing_instance_profile" {
+  description = "Set to true if IAM instance profile already exists in AWS"
+  type        = bool
+  default     = false
 }

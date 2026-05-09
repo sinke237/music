@@ -20,6 +20,7 @@ INFRA_DIR="$(dirname "$SCRIPT_DIR")"
 TERRAFORM_DIR="$INFRA_DIR/terraform"
 KEY_PATH="$HOME/babaNaTrue/ema-practice.pem"
 EC2_IP_FILE="$INFRA_DIR/.ec2_ip"
+TFVARS_FILE="${TFVARS_FILE:-}"
 
 # Logging functions
 log_info() {
@@ -77,6 +78,36 @@ check_prerequisites() {
     log_info "All prerequisites met."
 }
 
+# Clean up orphaned models volumes before provisioning
+cleanup_orphaned_volumes() {
+    log_step "Checking for orphaned models volumes..."
+    
+    ORPHANED_VOLUMES=$(aws ec2 describe-volumes \
+        --filters "Name=tag:Name,Values=*-models-volume" "Name=status,Values=available" \
+        --query 'Volumes[*].VolumeId' \
+        --output text 2>/dev/null || echo "")
+    
+    if [ -n "$ORPHANED_VOLUMES" ]; then
+        log_warn "Found orphaned models volumes:"
+        for vol in $ORPHANED_VOLUMES; do
+            log_warn "  - $vol"
+        done
+        
+        read -p "$(echo -e ${YELLOW}Delete orphaned volumes before provisioning? [y/N]: ${NC})" -n1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            for vol in $ORPHANED_VOLUMES; do
+                log_info "Deleting $vol..."
+                aws ec2 delete-volume --volume-id "$vol" && log_info "Deleted $vol" || log_error "Failed to delete $vol"
+            done
+        else
+            log_warn "Orphaned volumes preserved. Terraform may fail if device names conflict."
+        fi
+    else
+        log_info "No orphaned volumes found."
+    fi
+}
+
 # Initialize Terraform (idempotent)
 init_terraform() {
     log_step "Initializing Terraform..."
@@ -103,8 +134,13 @@ apply_terraform() {
         log_warn "Infrastructure already exists. Terraform will only apply changes."
     fi
     
-    # Auto-approve for non-interactive mode
-    terraform apply -auto-approve
+    # Apply with optional tfvars file
+    if [ -n "$TFVARS_FILE" ]; then
+        log_info "Using tfvars file: $TFVARS_FILE"
+        terraform apply -var-file="$TFVARS_FILE" -auto-approve
+    else
+        terraform apply -auto-approve
+    fi
     
     log_info "Terraform apply completed."
 }
@@ -197,23 +233,26 @@ main() {
     # Step 1: Check prerequisites
     check_prerequisites
     
-    # Step 2: Initialize Terraform (idempotent)
+    # Step 2: Clean up orphaned volumes
+    cleanup_orphaned_volumes
+    
+    # Step 3: Initialize Terraform (idempotent)
     init_terraform
     
-    # Step 3: Apply Terraform configuration (idempotent)
+    # Step 4: Apply Terraform configuration (idempotent)
     apply_terraform
     
-    # Step 4: Get EC2 IP
+    # Step 5: Get EC2 IP
     EC2_IP=$(get_ec2_ip)
     log_info "EC2 Public IP: $EC2_IP"
     
-    # Step 5: Save IP for other scripts
+    # Step 6: Save IP for other scripts
     save_ec2_ip "$EC2_IP"
     
-    # Step 6: Wait for instance to be ready (idempotent)
+    # Step 7: Wait for instance to be ready (idempotent)
     wait_for_instance "$EC2_IP"
     
-    # Step 7: Clone repository (idempotent)
+    # Step 8: Clone repository (idempotent)
     clone_repository "$EC2_IP"
     
     log_info "========================================"

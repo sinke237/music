@@ -1,5 +1,5 @@
 [Unit]
-Description=Wan2.2 Video Generation API Server
+Description=Wan2.2 Video Generation API Server (14B-GGUF)
 Documentation=https://github.com/sinke237/music
 After=network.target network-online.target
 Wants=network-online.target
@@ -9,12 +9,15 @@ Type=simple
 User=ec2-user
 Group=ec2-user
 WorkingDirectory=/opt/app/music/Wan2.2
-Environment="CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7"
+
+# GPU Configuration - Single GPU (shared with ACE-Step)
+Environment="CUDA_VISIBLE_DEVICES=0"
 Environment="PYTHONUNBUFFERED=1"
 Environment="PYTHONDONTWRITEBYTECODE=1"
 
-ExecStartPre=/bin/sleep 5
-ExecStart=/opt/app/music/Wan2.2/.venv/bin/python api_server.py --host 127.0.0.1 --port 8080 --ckpt-dir /opt/models/Wan2.2-T2V-A14B --default-size 1280x720
+# Model: Wan2.2-14B-T2V-GGUF (Q6_K variant)
+# Uses ComfyUI for efficient inference on 24GB VRAM
+ExecStart=/opt/app/music/Wan2.2/.venv/bin/python api_server.py --host 127.0.0.1 --port 8080 --model gguf-q6 --default-size 1280x720
 
 Restart=on-failure
 RestartSec=30
@@ -24,8 +27,9 @@ TimeoutStopSec=300
 StandardOutput=append:/opt/logs/wan22.log
 StandardError=append:/opt/logs/wan22-error.log
 
-MemoryHigh=500G
-MemoryMax=520G
+# Resource Limits (for A10G 24GB)
+MemoryHigh=20G
+MemoryMax=24G
 
 CPUWeight=90
 IOWeight=90

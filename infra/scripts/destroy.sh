@@ -113,7 +113,7 @@ show_destruction_plan() {
     
     if [ "$DESTROY_MODELS" = true ]; then
         log_warn "WILL DESTROY:"
-        log_warn "  ✗ EC2 instance (p4de.24xlarge)"
+        log_warn "  ✗ EC2 instance (g5.4xlarge)"
         log_warn "  ✗ Elastic IP"
         log_warn "  ✗ VPC, Subnets, Security Groups"
         log_warn "  ✗ IAM roles and policies"
@@ -124,7 +124,7 @@ show_destruction_plan() {
         log_warn "Models will need to be re-downloaded (~50GB, 1-2 hours)"
     else
         log_warn "WILL DESTROY:"
-        log_warn "  ✗ EC2 instance (p4de.24xlarge)"
+        log_warn "  ✗ EC2 instance (g5.4xlarge)"
         log_warn "  ✗ Elastic IP"
         log_warn "  ✗ VPC, Subnets, Security Groups"
         log_warn "  ✗ IAM roles and policies"
@@ -140,6 +140,56 @@ show_destruction_plan() {
     log_warn ""
 }
 
+# Delete orphaned models volumes by tag
+delete_orphaned_models_volumes() {
+    log_step "Checking for orphaned models volumes..."
+    
+    ORPHANED_VOLUMES=$(aws ec2 describe-volumes \
+        --filters "Name=tag:Name,Values=*-models-volume" "Name=status,Values=available" \
+        --query 'Volumes[*].VolumeId' \
+        --output text 2>/dev/null || echo "")
+    
+    if [ -n "$ORPHANED_VOLUMES" ]; then
+        log_warn "Found orphaned models volumes:"
+        for vol in $ORPHANED_VOLUMES; do
+            log_warn "  - $vol"
+        done
+        
+        if [ "$DESTROY_MODELS" = true ]; then
+            log_warn "Deleting orphaned models volumes..."
+            for vol in $ORPHANED_VOLUMES; do
+                aws ec2 delete-volume --volume-id "$vol" && log_info "Deleted $vol" || log_error "Failed to delete $vol"
+            done
+        else
+            log_info "Preserving orphaned volumes (use --destroy-models to delete)"
+        fi
+    fi
+}
+
+# Force detach models volume from instance if attached
+force_detach_models_volume() {
+    if [ "$DESTROY_MODELS" = true ]; then
+        log_step "Force detaching any attached models volumes..."
+        
+        ATTACHED_VOLUMES=$(aws ec2 describe-volumes \
+            --filters "Name=tag:Name,Values=*-models-volume" "Name=status,Values=in-use" \
+            --query 'Volumes[*].[VolumeId,Attachments[0].InstanceId]' \
+            --output text 2>/dev/null || echo "")
+        
+        if [ -n "$ATTACHED_VOLUMES" ]; then
+            echo "$ATTACHED_VOLUMES" | while read vol_id instance_id; do
+                if [ -n "$vol_id" ] && [ "$vol_id" != "None" ]; then
+                    log_warn "Force detaching $vol_id from $instance_id..."
+                    aws ec2 detach-volume --volume-id "$vol_id" --force 2>/dev/null || true
+                    
+                    log_info "Waiting for volume to become available..."
+                    aws ec2 wait volume-available --volume-id "$vol_id" 2>/dev/null || true
+                fi
+            done
+        fi
+    fi
+}
+
 # Destroy Terraform resources
 destroy_terraform() {
     log_step "Destroying Terraform resources..."
@@ -147,20 +197,23 @@ destroy_terraform() {
     
     if [ "$DESTROY_MODELS" = true ]; then
         log_warn "Destroying models volume..."
-        # Destroy everything including models volume
+        
+        force_detach_models_volume
+        
         terraform destroy -auto-approve
+        
+        delete_orphaned_models_volumes
     else
         log_info "Preserving models volume..."
-        # Destroy everything EXCEPT models volume
-        # Remove models volume from state temporarily
         if terraform state list 2>/dev/null | grep -q "aws_ebs_volume.models"; then
             log_info "Removing models volume from Terraform state..."
             terraform state rm aws_ebs_volume.models 2>/dev/null || true
             terraform state rm aws_volume_attachment.models 2>/dev/null || true
         fi
         
-        # Destroy everything else
         terraform destroy -auto-approve
+        
+        delete_orphaned_models_volumes
     fi
     
     log_info "Terraform resources destroyed."

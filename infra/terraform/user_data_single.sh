@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
-# EC2 User Data Script - Single Instance Mode (p4de.24xlarge)
-# All services on one instance: ACE-Step, Wan2.2, and Frontend
+# EC2 User Data Script - Single Instance Mode
+# Supports: g5.4xlarge (24GB VRAM) - Wan2.2-14B-GGUF via ComfyUI
 # =============================================================================
 
 set -euo pipefail
@@ -67,21 +67,21 @@ mkdir -p /opt/logs
 mkdir -p /opt/models
 
 # Format and mount persistent models volume (if not already mounted)
-# The models volume is attached at /dev/sdb
-if [ -b /dev/sdb ]; then
+# The models volume is attached at /dev/sdc (DL AMI uses /dev/sdb)
+if [ -b /dev/sdc ]; then
     # Check if already formatted
-    if ! blkid /dev/sdb > /dev/null 2>&1; then
+    if ! blkid /dev/sdc > /dev/null 2>&1; then
         echo "Formatting models volume..."
-        mkfs -t xfs /dev/sdb
+        mkfs -t xfs /dev/sdc
     fi
     
     # Mount if not already mounted
     if ! mountpoint -q /opt/models; then
         echo "Mounting models volume..."
-        mount /dev/sdb /opt/models
+        mount /dev/sdc /opt/models
         
         # Add to fstab for persistence across reboots
-        echo "/dev/sdb /opt/models xfs defaults,nofail 0 2" >> /etc/fstab
+        echo "/dev/sdc /opt/models xfs defaults,nofail 0 2" >> /etc/fstab
     fi
     
     echo "Models volume mounted at /opt/models"
@@ -117,7 +117,9 @@ systemctl enable nginx
 
 # Log completion
 echo "=== EC2 initialization completed at $(date) ===" > /opt/logs/initial-setup.log
-echo "Mode: Single Instance (p4de)" >> /opt/logs/initial-setup.log
+echo "Mode: Single Instance" >> /opt/logs/initial-setup.log
+echo "Instance: g5.4xlarge (24GB VRAM)" >> /opt/logs/initial-setup.log
+echo "Model: Wan2.2-14B-GGUF via ComfyUI" >> /opt/logs/initial-setup.log
 echo "Project: $PROJECT_NAME" >> /opt/logs/initial-setup.log
 echo "Repository: $REPO_URL" >> /opt/logs/initial-setup.log
 echo "Branch: $REPO_BRANCH" >> /opt/logs/initial-setup.log
