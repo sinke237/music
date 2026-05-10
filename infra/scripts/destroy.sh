@@ -140,6 +140,13 @@ show_destruction_plan() {
     log_warn ""
 }
 
+# Delete key pair from AWS (ensures fresh key on next provision)
+delete_key_pair() {
+    log_step "Deleting key pair from AWS..."
+    aws ec2 delete-key-pair --key-name ema-practice 2>/dev/null || true
+    log_info "Key pair deleted."
+}
+
 # Delete orphaned models volumes by tag
 delete_orphaned_models_volumes() {
     log_step "Checking for orphaned models volumes..."
@@ -226,6 +233,9 @@ cleanup_local_files() {
     # Remove EC2 IP file
     rm -f "$INFRA_DIR/.ec2_ip"
     
+    # Remove public key (will be regenerated on next provision)
+    rm -f "$INFRA_DIR/keys/ema-practice.pub"
+    
     # Models volume info
     if [ "$DESTROY_MODELS" = true ]; then
         log_info "Models volume destroyed."
@@ -250,6 +260,9 @@ main() {
     
     # Stop services on EC2 (optional)
     stop_ec2_services
+    
+    # Delete key pair from AWS (ensures fresh key on next provision)
+    delete_key_pair
     
     # Destroy Terraform resources
     destroy_terraform

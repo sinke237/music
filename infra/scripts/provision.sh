@@ -71,6 +71,17 @@ check_prerequisites() {
     # Set correct permissions on SSH key
     chmod 600 "$KEY_PATH"
     
+    # Generate public key from private key if needed
+    KEYS_DIR="$INFRA_DIR/keys"
+    PUBLIC_KEY_PATH="$KEYS_DIR/ema-practice.pub"
+    
+    if [ ! -f "$PUBLIC_KEY_PATH" ]; then
+        log_info "Generating public key from private key..."
+        mkdir -p "$KEYS_DIR"
+        ssh-keygen -y -f "$KEY_PATH" > "$PUBLIC_KEY_PATH"
+        log_info "Public key created at $PUBLIC_KEY_PATH"
+    fi
+    
     # Check terraform version
     TERRAFORM_VERSION=$(terraform version -json 2>/dev/null | grep -o '"terraform_version": *"[^"]*"' | cut -d'"' -f4 || terraform version | head -1)
     log_info "Terraform version: $TERRAFORM_VERSION"

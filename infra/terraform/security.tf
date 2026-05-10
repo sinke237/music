@@ -73,28 +73,6 @@ resource "aws_security_group_rule" "wan_internal" {
   description               = "Wan2.2 API (internal only)"
 }
 
-# Inter-instance communication for distributed computing
-resource "aws_security_group_rule" "inter_instance_all" {
-  type                     = "ingress"
-  from_port                = 0
-  to_port                  = 65535
-  protocol                 = "tcp"
-  source_security_group_id = aws_security_group.ec2_sg.id
-  security_group_id        = aws_security_group.ec2_sg.id
-  description              = "Inter-instance communication (multi-node distributed)"
-}
-
-# MPI/NCCL communication ports for distributed training/inference
-resource "aws_security_group_rule" "distributed_ports" {
-  type                     = "ingress"
-  from_port                = 29500
-  to_port                  = 29600
-  protocol                 = "tcp"
-  source_security_group_id = aws_security_group.ec2_sg.id
-  security_group_id        = aws_security_group.ec2_sg.id
-  description              = "Distributed training/inference ports (PyTorch Distributed)"
-}
-
 resource "aws_security_group_rule" "egress_all" {
   type              = "egress"
   from_port         = 0
