@@ -61,27 +61,6 @@ check_prerequisites() {
         exit 1
     fi
     
-    # Check if SSH key exists
-    if [ ! -f "$KEY_PATH" ]; then
-        log_error "SSH key not found at $KEY_PATH"
-        log_info "Please ensure the private key exists or update KEY_PATH in this script."
-        exit 1
-    fi
-    
-    # Set correct permissions on SSH key
-    chmod 600 "$KEY_PATH"
-    
-    # Generate public key from private key if needed
-    KEYS_DIR="$INFRA_DIR/keys"
-    PUBLIC_KEY_PATH="$KEYS_DIR/ema-practice.pub"
-    
-    if [ ! -f "$PUBLIC_KEY_PATH" ]; then
-        log_info "Generating public key from private key..."
-        mkdir -p "$KEYS_DIR"
-        ssh-keygen -y -f "$KEY_PATH" > "$PUBLIC_KEY_PATH"
-        log_info "Public key created at $PUBLIC_KEY_PATH"
-    fi
-    
     # Check terraform version
     TERRAFORM_VERSION=$(terraform version -json 2>/dev/null | grep -o '"terraform_version": *"[^"]*"' | cut -d'"' -f4 || terraform version | head -1)
     log_info "Terraform version: $TERRAFORM_VERSION"
@@ -117,6 +96,125 @@ cleanup_orphaned_volumes() {
     else
         log_info "No orphaned volumes found."
     fi
+}
+
+# Generate SSH key pair (both locally and for AWS via Terraform)
+generate_ssh_key() {
+    log_step "Generating SSH key pair..."
+    
+    KEY_DIR="$HOME/babaNaTrue"
+    KEY_PATH="$KEY_DIR/ema-practice.pem"
+    KEYS_DIR="$INFRA_DIR/keys"
+    PUBLIC_KEY_PATH="$KEYS_DIR/ema-practice.pub"
+    
+    # Create key directory if it doesn't exist
+    mkdir -p "$KEY_DIR"
+    mkdir -p "$KEYS_DIR"
+    
+    # Generate private key if it doesn't exist
+    if [ ! -f "$KEY_PATH" ]; then
+        log_info "Creating new SSH key pair at $KEY_PATH..."
+        ssh-keygen -t rsa -b 2048 -f "$KEY_PATH" -N "" -C "ema-practice"
+    else
+        log_info "SSH key exists at $KEY_PATH"
+    fi
+    
+    # Set correct permissions (400 is required for SSH private keys)
+    chmod 400 "$KEY_PATH"
+    
+    # Generate public key for Terraform (always regenerate to ensure sync)
+    ssh-keygen -y -f "$KEY_PATH" > "$PUBLIC_KEY_PATH" 2>/dev/null
+    
+    # Ensure file is flushed to disk
+    sync
+    
+    # Verify the file was written correctly by reading it back
+    if [ ! -f "$PUBLIC_KEY_PATH" ]; then
+        log_error "Failed to create public key file"
+        exit 1
+    fi
+    
+    # Verify public key matches private key
+    # Note: AWS uses PKCS8 DER format for fingerprints, not OpenSSH format
+    LOCAL_DER_FP=$(ssh-keygen -e -f "$KEY_PATH" -m PKCS8 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -md5 -c 2>/dev/null | awk '{print $NF}')
+    PUB_DER_FP=$(ssh-keygen -e -f "$PUBLIC_KEY_PATH" -m PKCS8 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -md5 -c 2>/dev/null | awk '{print $NF}')
+    
+    if [ "$LOCAL_DER_FP" != "$PUB_DER_FP" ]; then
+        log_error "Public key file does not match private key!"
+        log_error "  Private key fingerprint (DER): $LOCAL_DER_FP"
+        log_error "  Public key fingerprint (DER):   $PUB_DER_FP"
+        exit 1
+    fi
+    
+    log_info "Public key created at $PUBLIC_KEY_PATH"
+    log_info "Key fingerprint (AWS format): $LOCAL_DER_FP"
+}
+
+# Delete existing key pair from AWS (ensures fresh key)
+delete_key_pair() {
+    log_step "Ensuring clean key pair state..."
+    
+    # Delete from AWS
+    aws ec2 delete-key-pair --key-name ema-practice 2>/dev/null || true
+    
+    # Delete local private key (so provision creates fresh)
+    rm -f "$HOME/babaNaTrue/ema-practice.pem"
+    rm -f "$HOME/babaNaTrue/ema-practice.pem.pub"
+    
+    # Delete local public key
+    rm -f "$INFRA_DIR/keys/ema-practice.pub"
+    
+    # Remove old/incorrect location
+    rm -rf "$TERRAFORM_DIR/keys"
+    
+    # Remove from Terraform state if exists
+    cd "$TERRAFORM_DIR"
+    terraform state rm 'aws_key_pair.deployer[0]' 2>/dev/null || true
+    cd - > /dev/null
+    
+    log_info "Key pair state cleaned."
+}
+
+# Import existing IAM resources into Terraform state if they exist in AWS
+import_iam_resources() {
+    log_step "Checking for existing IAM resources..."
+    cd "$TERRAFORM_DIR"
+    
+    # Get project name from tfvars or use default
+    PROJECT_NAME=$(grep -E '^project_name\s*=' terraform.tfvars 2>/dev/null | cut -d'"' -f2 || grep -E '^project_name\s*=' terraform.tfvars | cut -d'=' -f2 | tr -d ' "')
+    PROJECT_NAME="${PROJECT_NAME:-ema-practice}"
+    
+    # Check if IAM role exists in AWS
+    if aws iam get-role --role-name "${PROJECT_NAME}-ec2-role" 2>/dev/null; then
+        log_warn "IAM role ${PROJECT_NAME}-ec2-role already exists in AWS"
+        
+        # Check if it's already in Terraform state
+        if ! terraform state list 2>/dev/null | grep -q "aws_iam_role.ec2_role\[0\]"; then
+            log_info "Importing IAM role into Terraform state..."
+            terraform import "aws_iam_role.ec2_role[0]" "${PROJECT_NAME}-ec2-role" 2>/dev/null || true
+        fi
+        
+        # Update tfvars to use existing role
+        sed -i 's/^import_existing_iam_role.*/import_existing_iam_role = true/' terraform.tfvars
+        log_info "Updated import_existing_iam_role = true in terraform.tfvars"
+    fi
+    
+    # Check if instance profile exists in AWS
+    if aws iam get-instance-profile --instance-profile-name "${PROJECT_NAME}-ec2-profile" 2>/dev/null; then
+        log_warn "IAM instance profile ${PROJECT_NAME}-ec2-profile already exists in AWS"
+        
+        # Check if it's already in Terraform state
+        if ! terraform state list 2>/dev/null | grep -q "aws_iam_instance_profile.ec2_profile\[0\]"; then
+            log_info "Importing IAM instance profile into Terraform state..."
+            terraform import "aws_iam_instance_profile.ec2_profile[0]" "${PROJECT_NAME}-ec2-profile" 2>/dev/null || true
+        fi
+        
+        # Update tfvars to use existing profile
+        sed -i 's/^import_existing_instance_profile.*/import_existing_instance_profile = true/' terraform.tfvars
+        log_info "Updated import_existing_instance_profile = true in terraform.tfvars"
+    fi
+    
+    cd - > /dev/null
 }
 
 # Initialize Terraform (idempotent)
@@ -156,6 +254,31 @@ apply_terraform() {
     log_info "Terraform apply completed."
 }
 
+# Verify key fingerprints match
+verify_key_fingerprint() {
+    log_step "Verifying key fingerprints match..."
+    
+    # AWS computes fingerprints using MD5 of the DER-encoded public key (PKCS8 format)
+    # This is different from ssh-keygen which uses OpenSSH format
+    # We need to compute the fingerprint the same way AWS does
+    
+    LOCAL_FP=$(ssh-keygen -e -f "$KEY_PATH" -m PKCS8 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -md5 -c 2>/dev/null | awk '{print $NF}')
+    
+    # Get AWS key fingerprint
+    AWS_FP=$(aws ec2 describe-key-pairs --key-names ema-practice --query 'KeyPairs[0].KeyFingerprint' --output text 2>/dev/null)
+    
+    if [ "$LOCAL_FP" = "$AWS_FP" ]; then
+        log_info "Key fingerprints match - SSH authentication will work"
+    else
+        log_error "Key fingerprints DO NOT match!"
+        log_error "  Local (DER MD5): $LOCAL_FP"
+        log_error "  AWS:             $AWS_FP"
+        log_error ""
+        log_error "SSH authentication will fail. Run destroy.sh and provision.sh again."
+        exit 1
+    fi
+}
+
 # Get EC2 IP from Terraform outputs
 get_ec2_ip() {
     cd "$TERRAFORM_DIR"
@@ -175,7 +298,7 @@ wait_for_instance() {
     log_step "Waiting for EC2 instance to be ready..."
     
     # Check if already accessible
-    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null -i "$KEY_PATH" ec2-user@"$ip" "echo 'ready'" &> /dev/null; then
+    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o UserKnownHostsFile=/dev/null -i "$KEY_PATH" ubuntu@"$ip" "echo 'ready'" &> /dev/null; then
         log_skip "EC2 instance already accessible"
         return 0
     fi
@@ -184,7 +307,7 @@ wait_for_instance() {
     local attempt=1
     
     while [ $attempt -le $max_attempts ]; do
-        if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o UserKnownHostsFile=/dev/null -i "$KEY_PATH" ec2-user@"$ip" "echo 'ready'" &> /dev/null; then
+        if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o UserKnownHostsFile=/dev/null -i "$KEY_PATH" ubuntu@"$ip" "echo'ready'" &> /dev/null; then
             log_info "EC2 instance is ready!"
             return 0
         fi
@@ -203,7 +326,7 @@ clone_repository() {
     local ip="$1"
     log_step "Cloning repository on EC2 instance..."
     
-    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$KEY_PATH" ec2-user@"$ip" << 'ENDSSH'
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$KEY_PATH" ubuntu@"$ip" << 'ENDSSH'
         set -euo pipefail
         
         # Check if repository already exists
@@ -244,41 +367,47 @@ main() {
     # Step 1: Check prerequisites
     check_prerequisites
     
-    # Step 2: Clean up orphaned volumes
+    # Step 2: Delete existing key pair (ensures fresh key) - MUST run before generate_ssh_key
+    delete_key_pair
+    
+    # Step 3: Generate SSH key pair (after deletion ensures fresh keys)
+    generate_ssh_key
+    
+    # Step 4: Clean up orphaned volumes
     cleanup_orphaned_volumes
     
-    # Step 3: Initialize Terraform (idempotent)
+    # Step 5: Initialize Terraform (idempotent)
     init_terraform
     
-    # Step 4: Apply Terraform configuration (idempotent)
+    # Step 6: Import existing IAM resources into state
+    import_iam_resources
+    
+    # Step 7: Apply Terraform configuration (idempotent)
     apply_terraform
     
-    # Step 5: Get EC2 IP
+    # Step 8: Verify key fingerprints match
+    verify_key_fingerprint
+    
+    # Step 9: Get EC2 IP
     EC2_IP=$(get_ec2_ip)
     log_info "EC2 Public IP: $EC2_IP"
     
-    # Step 6: Save IP for other scripts
+    # Step 10: Save IP for other scripts
     save_ec2_ip "$EC2_IP"
     
-    # Step 7: Wait for instance to be ready (idempotent)
-    wait_for_instance "$EC2_IP"
-    
-    # Step 8: Clone repository (idempotent)
-    clone_repository "$EC2_IP"
+    # Step 11: Clone repository (idempotent) - run manually after instance is ready
+    # clone_repository "$EC2_IP"
     
     log_info "========================================"
     log_info "Infrastructure provisioning completed!"
     log_info ""
     log_info "EC2 Public IP: $EC2_IP"
-    log_info "Web UI will be available at: http://$EC2_IP:3000"
     log_info ""
-    log_info "Next steps:"
-    log_info "  1. Run: ./scripts/start-apps.sh"
-    log_info "  2. Run: ./scripts/setup-ssl-dns.sh (for HTTPS)"
+    log_info "Wait for instance to be ready on AWS, then run:"
+    log_info "  ./scripts/start-apps.sh"
     log_info ""
-    log_info "This script is idempotent - safe to run multiple times."
     log_info "To SSH into the instance:"
-    log_info "  ssh -i $KEY_PATH ec2-user@$EC2_IP"
+    log_info "  ssh -i $KEY_PATH ubuntu@$EC2_IP"
 }
 
 # Run main function

@@ -7,8 +7,8 @@ Requires=ace-step-1.5.service
 
 [Service]
 Type=simple
-User=ec2-user
-Group=ec2-user
+User=ubuntu
+Group=ubuntu
 WorkingDirectory=/opt/app/music/ace-step-ui
 Environment="NODE_ENV=production"
 Environment="PORT=3001"

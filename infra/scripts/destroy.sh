@@ -113,22 +113,22 @@ show_destruction_plan() {
     
     if [ "$DESTROY_MODELS" = true ]; then
         log_warn "WILL DESTROY:"
-        log_warn "  ✗ EC2 instance (g5.4xlarge)"
-        log_warn "  ✗ Elastic IP"
-        log_warn "  ✗ VPC, Subnets, Security Groups"
-        log_warn "  ✗ IAM roles and policies"
-        log_warn "  ✗ Key pair"
-        log_warn "  ✗ MODELS VOLUME (/opt/models) - ~50GB"
+        log_warn "  × EC2 instance (g5.4xlarge)"
+        log_warn "  × Elastic IP"
+        log_warn "  × VPC, Subnets, Security Groups"
+        log_warn "  × IAM roles and policies"
+        log_warn "  × Key pair"
+        log_warn "  × MODELS VOLUME (/opt/models) - ~50GB"
         log_warn ""
         log_warn "This action is NON-REVERSIBLE"
         log_warn "Models will need to be re-downloaded (~50GB, 1-2 hours)"
     else
         log_warn "WILL DESTROY:"
-        log_warn "  ✗ EC2 instance (g5.4xlarge)"
-        log_warn "  ✗ Elastic IP"
-        log_warn "  ✗ VPC, Subnets, Security Groups"
-        log_warn "  ✗ IAM roles and policies"
-        log_warn "  ✗ Key pair"
+        log_warn "  × EC2 instance (g5.4xlarge)"
+        log_warn "  × Elastic IP"
+        log_warn "  × VPC, Subnets, Security Groups"
+        log_warn "  × IAM roles and policies"
+        log_warn "  × Key pair"
         log_warn ""
         log_warn "WILL PRESERVE:"
         log_warn "  ✓ MODELS VOLUME (/opt/models) - ~50GB"
@@ -140,11 +140,89 @@ show_destruction_plan() {
     log_warn ""
 }
 
-# Delete key pair from AWS (ensures fresh key on next provision)
+# Ensure public key file exists for Terraform (Terraform file() function requires it)
+ensure_public_key_exists() {
+    PUBLIC_KEY_FILE="$INFRA_DIR/keys/ema-practice.pub"
+    PRIVATE_KEY_FILE="$HOME/babaNaTrue/ema-practice.pem"
+    
+    if [ ! -f "$PUBLIC_KEY_FILE" ]; then
+        log_step "Creating public key file for Terraform..."
+        mkdir -p "$(dirname "$PUBLIC_KEY_FILE")"
+        
+        # If private key exists, extract public key from it
+        if [ -f "$PRIVATE_KEY_FILE" ]; then
+            ssh-keygen -y -f "$PRIVATE_KEY_FILE" > "$PUBLIC_KEY_FILE" 2>/dev/null
+            log_info "Extracted public key from existing private key"
+        else
+            # Otherwise create a temporary placeholder (will be regenerated on provision)
+            echo "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCplaceholder ema-practice" > "$PUBLIC_KEY_FILE"
+            log_warn "Created placeholder public key (will be regenerated on provision)"
+        fi
+    fi
+}
+
+# Delete key pair from AWS and locally (ensures fresh key on next provision)
+# Note: This runs AFTER Terraform destroy, so the public key file is still available
 delete_key_pair() {
-    log_step "Deleting key pair from AWS..."
+    log_step "Deleting key pair..."
+    
+    # Delete from AWS
     aws ec2 delete-key-pair --key-name ema-practice 2>/dev/null || true
-    log_info "Key pair deleted."
+    
+    # Delete local private key
+    rm -f "$HOME/babaNaTrue/ema-practice.pem"
+    
+    # Delete local public key
+    rm -f "$INFRA_DIR/keys/ema-practice.pub"
+    
+    # Remove old/incorrect location if it exists
+    rm -rf "$TERRAFORM_DIR/keys"
+    
+    log_info "Key pair deleted from AWS and locally."
+}
+
+# Reset tfvars to not import existing IAM resources
+reset_tfvars() {
+    log_step "Resetting terraform.tfvars..."
+    
+    if [ -f "$TERRAFORM_DIR/terraform.tfvars" ]; then
+        sed -i 's/^import_existing_iam_role.*/import_existing_iam_role = false/' "$TERRAFORM_DIR/terraform.tfvars"
+        sed -i 's/^import_existing_instance_profile.*/import_existing_instance_profile = false/' "$TERRAFORM_DIR/terraform.tfvars"
+        log_info "Reset IAM import flags to false"
+    fi
+}
+
+# Clean up orphaned IAM resources (roles/profiles that exist in AWS but not in Terraform state)
+cleanup_orphaned_iam() {
+    log_step "Checking for orphaned IAM resources..."
+    
+    PROJECT_NAME=$(grep -E '^project_name\s*=' "$TERRAFORM_DIR/terraform.tfvars" 2>/dev/null | cut -d'"' -f2 || echo "ema-practice")
+    
+    # Check and delete IAM role ifexists
+    if aws iam get-role --role-name "${PROJECT_NAME}-ec2-role" 2>/dev/null; then
+        log_warn "Found orphaned IAM role: ${PROJECT_NAME}-ec2-role"
+        
+        # Delete inline policies first
+        for policy in $(aws iam list-role-policies --role-name "${PROJECT_NAME}-ec2-role" --output text 2>/dev/null); do
+            log_info "Deleting policy: $policy"
+            aws iam delete-role-policy --role-name "${PROJECT_NAME}-ec2-role" --policy-name "$policy" 2>/dev/null || true
+        done
+        
+        # Detach managed policies
+        for arn in $(aws iam list-attached-role-policies --role-name "${PROJECT_NAME}-ec2-role" --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null); do
+            log_info "Detaching policy: $arn"
+            aws iam detach-role-policy --role-name "${PROJECT_NAME}-ec2-role" --policy-arn "$arn" 2>/dev/null || true
+        done
+        
+        # Delete role
+        aws iam delete-role --role-name "${PROJECT_NAME}-ec2-role" 2>/dev/null && log_info "Deleted IAM role" || log_warn "Could not delete IAM role"
+    fi
+    
+    # Check and delete instance profile if exists
+    if aws iam get-instance-profile --instance-profile-name "${PROJECT_NAME}-ec2-profile" 2>/dev/null; then
+        log_warn "Found orphaned IAM instance profile: ${PROJECT_NAME}-ec2-profile"
+        aws iam delete-instance-profile --instance-profile-name "${PROJECT_NAME}-ec2-profile" 2>/dev/null && log_info "Deleted IAM instance profile" || log_warn "Could not delete IAM instance profile"
+    fi
 }
 
 # Delete orphaned models volumes by tag
@@ -233,9 +311,6 @@ cleanup_local_files() {
     # Remove EC2 IP file
     rm -f "$INFRA_DIR/.ec2_ip"
     
-    # Remove public key (will be regenerated on next provision)
-    rm -f "$INFRA_DIR/keys/ema-practice.pub"
-    
     # Models volume info
     if [ "$DESTROY_MODELS" = true ]; then
         log_info "Models volume destroyed."
@@ -261,11 +336,20 @@ main() {
     # Stop services on EC2 (optional)
     stop_ec2_services
     
-    # Delete key pair from AWS (ensures fresh key on next provision)
+    # Ensure public key file exists (Terraform file() requires it)
+    ensure_public_key_exists
+    
+    # Reset tfvars to not import existing resources
+    reset_tfvars
+    
+    # Destroy Terraform resources (run FIRST - needs public key file)
+    destroy_terraform
+    
+    # Delete key pair from AWS (run AFTER Terraform destroy)
     delete_key_pair
     
-    # Destroy Terraform resources
-    destroy_terraform
+    # Clean up orphaned IAM resources after Terraform destroy
+    cleanup_orphaned_iam
     
     # Cleanup local files
     cleanup_local_files

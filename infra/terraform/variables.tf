@@ -72,7 +72,7 @@ variable "key_name" {
 variable "public_key_path" {
   description = "Path to public key file"
   type        = string
-  default     = "keys/ema-practice.pub"
+  default     = "../keys/ema-practice.pub"
 }
 
 variable "private_key_path" {
