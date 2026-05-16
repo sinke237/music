@@ -176,17 +176,22 @@ setup_ace_step() {
             echo "[SKIP] Dependencies already installed"
         fi
         
-        # Check if models are downloaded (use persistent storage)
-        if [ ! -d "/opt/models/acestep/acestep-v15-xl-sft" ] || [ -z "$(ls -A /opt/models/acestep/acestep-v15-xl-sft 2>/dev/null)" ]; then
-            echo "Downloading ACE-Step models to persistent storage..."
-            echo "This may take 30-60 minutes on first run..."
+        # Check if essential models are downloaded
+        # Main model contains: vae, Qwen3-Embedding-0.6B, acestep-v15-turbo, acestep-5Hz-lm-1.7B
+        if [ ! -f "/opt/models/acestep/config.json" ] || [ ! -d "/opt/models/acestep/acestep-v15-turbo" ]; then
+            echo "Downloading ACE-Step main model (contains essentials: vae, DiT, 1.7B LLM)..."
+            echo "This is approximately 10GB and may take 5-15 minutes..."
             
-            # Download all models (best quality)
             export ACESTEP_CHECKPOINTS_DIR=/opt/models/acestep
-            uv run acestep-download --all --download-source auto || {
-                echo "Model download failed. Models will be downloaded on first run."
-                echo "You can manually download with: ACESTEP_CHECKPOINTS_DIR=/opt/models/acestep uv run acestep-download --all"
+            
+            # Download main model only (contains all essentials)
+            uv run acestep-download --dir /opt/models/acestep || {
+                echo "Download failed. Trying explicit model..."
+                uv run acestep-download --model acestep-v15-turbo --dir /opt/models/acestep || true
             }
+            
+            echo "Model download complete. Contents:"
+            ls -la /opt/models/acestep/
         else
             echo "[SKIP] ACE-Step models already downloaded"
             echo "Models available: $(ls /opt/models/acestep/)"
@@ -251,19 +256,27 @@ setup_wan22() {
         # Check if models are downloaded (use persistent storage)
         mkdir -p /opt/models
         
-        if [ ! -d "/opt/models/Wan2.2-T2V-A14B" ] || [ -z "$(ls -A /opt/models/Wan2.2-T2V-A14B 2>/dev/null)" ]; then
-            echo "Downloading Wan2.2-T2V-A14B model to persistent storage..."
-            echo "This is a 40GB+ download and may take 1-2 hours..."
-            
-            pip install "huggingface_hub[cli]" 2>/dev/null || true
-            
-            huggingface-cli download Wan-AI/Wan2.2-T2V-A14B --local-dir /opt/models/Wan2.2-T2V-A14B || {
-                echo "Model download failed. You can manually download with:"
-                echo "  huggingface-cli download Wan-AI/Wan2.2-T2V-A14B --local-dir /opt/models/Wan2.2-T2V-A14B"
-            }
-        else
-            echo "[SKIP] Wan2.2 models already downloaded"
+        # Wan2.2-T2V-A14B is ~118GB - check disk space before downloading
+        if [ -d "/opt/models/Wan2.2-T2V-A14B" ] && [ "$(ls -A /opt/models/Wan2.2-T2V-A14B 2>/dev/null)" ]; then
+            echo "[SKIP] Wan2.2-T2V-A14B models already downloaded"
             echo "Model size: $(du -sh /opt/models/Wan2.2-T2V-A14B | cut -f1)"
+        else
+            # Check available disk space (need at least 150GB for download + extraction)
+            AVAILABLE_GB=$(df -BG / | tail -1 | awk '{print $4}' | sed 's/G//')
+            if [ "$AVAILABLE_GB" -lt 150 ]; then
+                echo "[WARN] Insufficient disk space for Wan2.2-T2V-A14B (~118GB needed)"
+                echo "Available: ${AVAILABLE_GB}GB"
+                echo "Skipping Wan2.2 model download. Download manually if needed:"
+                echo "  huggingface-cli download Wan-AI/Wan2.2-T2V-A14B --local-dir /opt/models/Wan2.2-T2V-A14B"
+            else
+                echo "Downloading Wan2.2-T2V-A14B model (~118GB, may take 1-2 hours)..."
+                pip install "huggingface_hub[cli]" 2>/dev/null || true
+                
+                huggingface-cli download Wan-AI/Wan2.2-T2V-A14B --local-dir /opt/models/Wan2.2-T2V-A14B || {
+                    echo "[WARN] Wan2.2 model download failed. Download manually if needed:"
+                    echo "  huggingface-cli download Wan-AI/Wan2.2-T2V-A14B --local-dir /opt/models/Wan2.2-T2V-A14B"
+                }
+            fi
         fi
         
         echo "Wan2.2 setup verified"
@@ -331,6 +344,13 @@ ACESTEP_DTYPE=float32
 # Wan2.2 Video Generation
 WAN_CKPT_DIR=/opt/models/Wan2.2-T2V-A14B
 WAN_GPU_DEVICE=0
+
+# GPU On-Demand Service Management
+# Set to true to enable automatic GPU service startup/stop
+GPU_ON_DEMAND=true
+GPU_ON_DEMAND_SCRIPT=/opt/scripts/gpu-on-demand.sh
+# Idle timeout in seconds before stopping GPU services (0 = never stop)
+GPU_IDLE_TIMEOUT=300
 ENVEOF
             echo "Created .env in project root"
         else
@@ -580,7 +600,7 @@ copy_systemd_services() {
         mkdir -p /opt/app/music/ace-step-ui/server
         sudo mkdir -p /opt/logs
         
-        # Create ace-step-1.5.service if not exists
+# Create ace-step-1.5.service if not exists
         if [ ! -f "$SERVICES_DIR/ace-step-1.5.service" ]; then
             echo "Creating ace-step-1.5.service..."
             cat << 'SERVICE_CONF' | sudo tee "$SERVICES_DIR/ace-step-1.5.service" > /dev/null
@@ -589,6 +609,9 @@ Description=ACE-Step 1.5 Music Generation API Server
 Documentation=https://github.com/sinke237/music
 After=network.target network-online.target
 Wants=network-online.target
+# Mutual exclusion: never run with Wan2.2
+Conflicts=wan22.service
+Before=wan22.service
 
 [Service]
 Type=simple
@@ -597,19 +620,17 @@ Group=ubuntu
 WorkingDirectory=/opt/app/music/ACE-Step-1.5
 
 Environment="CUDA_VISIBLE_DEVICES=0"
-Environment="ACESTEP_INIT_LLM=auto"
+Environment="ACESTEP_CHECKPOINTS_DIR=/opt/models/acestep"
 Environment="ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-1.7B"
-Environment="ACESTEP_CONFIG_PATH=acestep-v15-turbo"
-Environment="ACESTEP_DOWNLOAD_SOURCE=auto"
+# Lazy load models - only load when request comes in
+Environment="ACESTEP_NO_INIT=true"
+# Offload to CPU when idle to free GPU
 Environment="ACESTEP_OFFLOAD_TO_CPU=true"
 Environment="ACESTEP_OFFLOAD_DIT_TO_CPU=true"
-Environment="ACESTEP_CHECKPOINTS_DIR=/opt/models/acestep"
-Environment="PORT=8001"
-Environment="SERVER_NAME=127.0.0.1"
-Environment="HOST=127.0.0.1"
 
 ExecStartPre=/bin/bash -c 'source /home/ubuntu/.bashrc && export PATH="$HOME/.local/bin:$PATH"'
-ExecStart=/home/ubuntu/.local/bin/uv run acestep-api --host 127.0.0.1 --port 8001 --enable-api --backend pt --server-name 127.0.0.1
+# Start without --init-llm for lazy loading; models load on first request
+ExecStart=/home/ubuntu/.local/bin/uv run acestep-api --host 127.0.0.1 --port 8001 --lm-model-path acestep-5Hz-lm-1.7B
 
 Restart=on-failure
 RestartSec=30
@@ -641,6 +662,9 @@ Description=Wan2.2 Video Generation API Server
 Documentation=https://github.com/sinke237/music
 After=network.target network-online.target
 Wants=network-online.target
+# Mutual exclusion: never run with ACE-Step
+Conflicts=ace-step-1.5.service
+Before=ace-step-1.5.service
 
 [Service]
 Type=simple
@@ -652,7 +676,7 @@ Environment="CUDA_VISIBLE_DEVICES=0"
 Environment="PYTHONUNBUFFERED=1"
 Environment="PYTHONDONTWRITEBYTECODE=1"
 
-ExecStart=/opt/app/music/Wan2.2/.venv/bin/python generate.py --task ti2v-5B --size 1280x704 --ckpt_dir /opt/models/Wan2.2-TI2V-5B --offload_model True --convert_model_dtype --t5_cpu --port 8080
+ExecStart=/opt/app/music/Wan2.2/.venv/bin/python generate.py --task t2v-14B --size 1280x704 --ckpt_dir /opt/models/Wan2.2-T2V-A14B --offload_model True --convert_model_dtype --t5_cpu --port 8080
 
 Restart=on-failure
 RestartSec=30
@@ -692,12 +716,13 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/app/music/ace-step-ui
 Environment="NODE_ENV=production"
-Environment="PORT=3000"
+Environment="PORT=3001"
 Environment="ACESTEP_API_URL=http://127.0.0.1:8001"
 Environment="WAN22_API_URL=http://127.0.0.1:8080"
 
-ExecStartPre=/bin/sleep 10
-ExecStart=/usr/bin/npm start
+# Build frontend if needed, then start both backend and frontend
+ExecStartPre=/bin/bash -c 'cd /opt/app/music/ace-step-ui && npm run build 2>/dev/null || true'
+ExecStart=/bin/bash -c 'cd /opt/app/music/ace-step-ui/server && npx tsx src/index.ts & cd /opt/app/music/ace-step-ui && npx vite preview --host 0.0.0.0 --port 3000 & wait'
 
 Restart=on-failure
 RestartSec=15
@@ -767,6 +792,60 @@ SERVICE_CONF
             echo "[SKIP] Systemd daemon already up to date"
         fi
         
+        # Install GPU on-demand manager script
+        echo "Installing GPU on-demand manager..."
+        sudo mkdir -p /opt/scripts
+        cat << 'GPU_SCRIPT' | sudo tee /opt/scripts/gpu-on-demand.sh > /dev/null
+#!/bin/bash
+# On-Demand Service Starter - Called by ace-step-ui backend
+set -euo pipefail
+LOG_FILE="/var/log/gpu-services.log"
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') \$1" | tee -a "\$LOG_FILE"; }
+
+start_ace_step() {
+    log "[GPU] Starting ACE-Step (stopping Wan2.2 if running)..."
+    sudo systemctl stop wan22 2>/dev/null || true
+    sleep 5
+    if ! systemctl is-active --quiet ace-step-1.5 2>/dev/null; then
+        sudo systemctl start ace-step-1.5
+        local timeout=60 start=\$(date +%s)
+        while ! curl -s http://localhost:8001/health > /dev/null 2>&1; do
+            [ \$(($(date +%s) - start)) -ge \$timeout ] && return 1
+            sleep 2
+        done
+    fi
+    log "[GPU] ACE-Step ready"
+}
+
+start_wan22() {
+    log "[GPU] Starting Wan2.2 (stopping ACE-Step if running)..."
+    sudo systemctl stop ace-step-1.5 2>/dev/null || true
+    sleep 5
+    if ! systemctl is-active --quiet wan22 2>/dev/null; then
+        sudo systemctl start wan22
+        local timeout=120 start=\$(date +%s)
+        while ! curl -s http://localhost:8080/health > /dev/null 2>&1; do
+            [ \$(($(date +%s) - start)) -ge \$timeout ] && return 1
+            sleep 2
+        done
+    fi
+    log "[GPU] Wan2.2 ready"
+}
+
+case "\${1:-}" in
+    start-ace-step) start_ace_step ;;
+    start-wan22) start_wan22 ;;
+    stop-ace-step) sudo systemctl stop ace-step-1.5 ;;
+    stop-wan22) sudo systemctl stop wan22 ;;
+    status) nvidia-smi --query-gpu=memory.used,memory.free --format=csv; systemctl is-active ace-step-1.5 wan22 2>/dev/null || true ;;
+    *) echo "Usage: \$0 {start-ace-step|start-wan22|stop-ace-step|stop-wan22|status}"; exit 1 ;;
+esac
+GPU_SCRIPT
+        sudo chmod +x /opt/scripts/gpu-on-demand.sh
+        
+        # Copy to /usr/local/bin for easy access
+        sudo cp /opt/scripts/gpu-on-demand.sh /usr/local/bin/gpu-on-demand 2>/dev/null || true
+        
         echo "Systemd services verified"
 ENDSSH
 }
@@ -778,6 +857,28 @@ start_services() {
     
     ssh -i "$KEY_PATH" ubuntu@"$ip" << 'ENDSSH'
         set -euo pipefail
+        
+        # Save current state of GPU services
+        ACE_STEP_WAS_RUNNING=false
+        WAN22_WAS_RUNNING=false
+        
+        if sudo systemctl is-active --quiet ace-step-1.5 2>/dev/null; then
+            ACE_STEP_WAS_RUNNING=true
+            echo "[STATE] ace-step-1.5 was running"
+        fi
+        
+        if sudo systemctl is-active --quiet wan22 2>/dev/null; then
+            WAN22_WAS_RUNNING=true
+            echo "[STATE] wan22 was running"
+        fi
+        
+        # Stop GPU services for clean state during deployment
+        echo "Stopping GPU services for clean deployment..."
+        sudo systemctl stop ace-step-1.5 2>/dev/null || true
+        sudo systemctl stop wan22 2>/dev/null || true
+        
+        # Wait for GPU memory to be freed
+        sleep 3
         
         # Function to start service if not running
         start_if_not_running() {
@@ -800,25 +901,46 @@ start_services() {
         sudo systemctl enable ace-step-ui 2>/dev/null || true
         sudo systemctl enable nginx 2>/dev/null || true
         
-        # Start services in dependency order
-        echo "Starting services in dependency order..."
+        # Start persistent services (nginx and ace-step-ui always run)
+        echo "Starting persistent services..."
         
-        start_if_not_running "ace-step-1.5" 30
-        start_if_not_running "wan22" 15
-        start_if_not_running "ace-step-ui" 5
         start_if_not_running "nginx" 2
+        start_if_not_running "ace-step-ui" 5
+        
+        # Restore GPU services if they were running before
+        echo ""
+        echo "Restoring GPU services state..."
+        if [ "$ACE_STEP_WAS_RUNNING" = true ]; then
+            echo "Starting ace-step-1.5 (was running before deployment)..."
+            sudo systemctl start ace-step-1.5
+            sleep 10
+        fi
+        
+        if [ "$WAN22_WAS_RUNNING" = true ]; then
+            echo "Starting wan22 (was running before deployment)..."
+            sudo systemctl start wan22
+            sleep 10
+        fi
         
         # Show status
         echo ""
         echo "Service Status:"
         echo "----------------------------------------"
-        sudo systemctl status ace-step-1.5 --no-pager || true
-        echo ""
-        sudo systemctl status wan22 --no-pager || true
+        sudo systemctl status nginx --no-pager || true
         echo ""
         sudo systemctl status ace-step-ui --no-pager || true
         echo ""
-        sudo systemctl status nginx --no-pager || true
+        echo "GPU Services:"
+        if [ "$ACE_STEP_WAS_RUNNING" = true ]; then
+            echo "  - ace-step-1.5: RESTORED (was running)"
+        else
+            echo "  - ace-step-1.5: STOPPED (on-demand)"
+        fi
+        if [ "$WAN22_WAS_RUNNING" = true ]; then
+            echo "  - wan22: RESTORED (was running)"
+        else
+            echo "  - wan22: STOPPED (on-demand)"
+        fi
         
         echo ""
         echo "GPU Status:"
@@ -826,7 +948,7 @@ start_services() {
         nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv || echo "Could not query GPU status"
         
         echo ""
-        echo "All services running!"
+        echo "Deployment complete!"
 ENDSSH
 }
 
@@ -866,15 +988,22 @@ main() {
     log_info "========================================"
     log_info "Application deployment completed!"
     log_info ""
-    log_info "Services are running:"
-    log_info "  - ACE-Step-1.5: http://$EC2_IP:8001 (GPU 0)"
-    log_info "  - Wan2.2: http://$EC2_IP:8080 (GPUs 1-7)"
-    log_info "  - ACE-Step UI: http://$EC2_IP:3000"
+    log_info "Always Running:"
     log_info "  - Nginx Gateway: http://$EC2_IP:80"
+    log_info "  - ACE-Step UI: http://$EC2_IP:3000"
     log_info ""
-    log_info "GPU Allocation:"
-    log_info "  - GPU 0: ACE-Step-1.5 (80GB)"
-    log_info "  - GPUs 1-7: Wan2.2 (560GB total)"
+    log_info "On-Demand GPU Services (start when needed):"
+    log_info "  - ACE-Step-1.5: http://$EC2_IP:8001 (Music generation)"
+    log_info "  - Wan2.2: http://$EC2_IP:8080 (Video generation)"
+    log_info ""
+    log_info "GPU: Single A10G (22GB) - shared between services"
+    log_info "  - ACE-Step-1.5: ~7GB when running (1.7B LLM + CPU offload)"
+    log_info "  - Wan2.2: ~15-18GB when running"
+    log_info "  - Services are mutually exclusive (only one runs at a time)"
+    log_info ""
+    log_info "To start GPU services on-demand:"
+    log_info "  ssh ubuntu@$EC2_IP '/opt/scripts/gpu-on-demand.sh start-ace-step'"
+    log_info "  ssh ubuntu@$EC2_IP '/opt/scripts/gpu-on-demand.sh start-wan22'"
     log_info ""
     log_info "This script is idempotent - safe to run multiple times."
 }

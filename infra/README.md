@@ -4,113 +4,135 @@ Production-ready AWS infrastructure for deploying AI music and video generation 
 
 ## Overview
 
-This infrastructure deploys services on a single EC2 GPU instance (g5.4xlarge) with 24GB VRAM:
+This infrastructure deploys services on a single EC2 GPU instance with on-demand GPU resource management:
 
-| Service | Type | GPU | VRAM | Port | Description |
-|---------|------|-----|------|------|-------------|
-| ace-step-ui | Frontend | CPU only | - | 3000 | Spotify-like web interface |
-| ace-step-1.5 | Backend | GPU 0 | ~24GB | 8001 | Music generation (ACE-Step) |
-| wan2.2 | Backend | GPU 0 | ~12-14GB | 8080 | Video generation (Wan2.2-14B-GGUF via ComfyUI) |
+| Service | Type | Port | GPU Usage |
+|---------|------|------|-----------|
+| nginx | API Gateway | 80 | N/A (always running) |
+| ace-step-ui | Frontend + API | 3000/3001 | N/A (always running) |
+| ace-step-1.5 | Music Generation | 8001 | ~7GB (on-demand) |
+| wan2.2 | Video Generation | 8080 | ~15-18GB (on-demand) |
 
 ## Instance Configuration
 
-### g5.4xlarge
+### GPU Instance
 
-- **Instance Type**: g5.4xlarge
-- **GPU**: 1 x NVIDIA A10G 24GB
+- **GPU**: 1 x NVIDIA A10G (22GB VRAM)
+- **Models**: g5.4xlarge, g6.4xlarge, or similar
 - **vCPUs**: 16
 - **Memory**: 64GB
-
-### Model Configuration
-
-**Wan2.2-14B-T2V-GGUF (Q6_K/Q8_0 variant)**:
-- ~12-14GB VRAM for quantized model
-- ComfyUI with tiled VAE decoding and model offloading
-- CUDA 12.x + PyTorch 2.1+ with xformers support
-- Fits comfortably in 24GB A10G with buffer for T5 encoder + VAE
-
-## Model Persistence
-
-Models are stored on a persistent EBS volume that survives infrastructure destruction.
-
-### Storage Architecture
-
-```
-/opt/app/          → EC2 root volume (destroyed)
-/opt/models/       → Persistent EBS volume (PRESERVED)
-  ├── acestep/     → ACE-Step models (~5GB)
-  └── Wan2.2/      → Wan2.2 models
-```
-
-### Destroy Options
-
-```bash
-# Destroy infrastructure BUT PRESERVE models (default)
-./scripts/destroy.sh
-
-# Destroy EVERYTHING including models
-./scripts/destroy.sh --destroy-models
-```
+- **Disk**: 200GB+ (models require ~160GB)
 
 ## Architecture
 
 ```
-+-------------------------------------------------------------------+
-|                        AWS Cloud                                   |
-|  +-------------------------------------------------------------+  |
-|  |                    VPC (10.0.0.0/16)                         |  |
-|  |  +-------------------------------------------------------+ |  |
-|  |  |              Public Subnet (10.0.1.0/24)               | |  |
-|  |  |  +---------------------------------------------------+ | |  |
-|  |  |  |     EC2 g5.4xlarge (1x A10G 24GB)                 | | |  |
-|  |  |  |                                                   | | |  |
-|  |  |  |  +--------------+    +------------------------+  | | |  |
-|  |  |  |  |  Nginx (80)  |    |    ace-step-ui (3000)  |  | | |  |
-|  |  |  |  |  API Gateway |    |    Frontend (CPU only) |  | | |  |
-|  |  |  |  +------+------|    +-----------+------------+  | | |  |
-|  |  |  |         |                           |          | | |  |
-|  |  |  |         | /api/ace-step/*           |          | | |  |
-|  |  |  |         +---------------------------+          | | |  |
-|  |  |  |         | /api/wan22/*                         | | |  |
-|  |  |  |  +------v--------------------------------------|-+ |  |
-|  |  |  |  |         Backend Services                    | |  |  |
-|  |  |  |  |  +----------------+   +------------------+ | |  |  |
-|  |  |  |  |  | ace-step-1.5   |   |     wan2.2       | | |  |  |
-|  |  |  |  |  | Port: 8001     |   |   Port: 8080     | | |  |  |
-|  |  |  |  |  | GPU: 0         |   |   GPU: 0         | | |  |  |
-|  |  |  |  |  +----------------+   +------------------+ | | |  |
-|  |  |  |  +---------------------------------------------+ | |  |
-|  |  |  +---------------------------------------------------+ |  |
-|  |  +---------------------------------------------------------+  |
-|  +-------------------------------------------------------------+  |
-+-------------------------------------------------------------------+
+┌─────────────────────────────────────────────────────────────────────┐
+│                        EC2 Instance                                  │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │                    Always Running                             │   │
+│  │  ┌─────────────┐    ┌──────────────────────────────────────┐ │   │
+│  │  │   Nginx     │    │           ace-step-ui                │ │   │
+│  │  │   (80)      │    │  Frontend (3000) + Backend API (3001)│ │   │
+│  │  │   Gateway   │    │  Spotify-like web interface          │ │   │
+│  │  └──────┬──────┘    └──────────────────────────────────────┘ │   │
+│  └─────────┼─────────────────────────────────────────────────────┘   │
+│            │                                                         │
+│            │ /api/ace-step/*                 /api/wan22/*           │
+│            │                                 │                       │
+│            ▼                                 ▼                       │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │               On-Demand GPU Services                          │   │
+│  │                (Mutual Exclusion)                             │   │
+│  │                                                               │   │
+│  │  ┌─────────────────┐        ┌─────────────────┐              │   │
+│  │  │   ace-step-1.5  │◄──────►│     wan2.2     │              │   │
+│  │  │   Port: 8001    │ never  │   Port: 8080   │              │   │
+│  │  │   GPU: ~7GB     │  run   │   GPU: ~15-18GB│              │   │
+│  │  │   simultaneously│        │                 │              │   │
+│  │  └─────────────────┘        └─────────────────┘              │   │
+│  │                                                               │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │               GPU Resource Manager                            │   │
+│  │  /opt/scripts/gpu-on-demand.sh                               │   │
+│  │  - Starts GPU services on-demand                              │   │
+│  │  - Ensures mutual exclusion (only one at a time)              │   │
+│  │  - Offloads to CPU when idle                                  │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-## GPU Allocation
+## GPU Resource Management
 
-| Service | GPU | VRAM | Reasoning |
-|---------|-----|------|-----------|
-| ace-step-1.5 | GPU 0 | ~20-24GB | Music generation (turbo models for 24GB) |
-| wan2.2 | GPU 0 | ~12-14GB | Wan2.2-14B-GGUF (quantized) |
+### On-Demand Service Architecture
 
-GPU isolation is enforced via `CUDA_VISIBLE_DEVICES`:
+GPU services (ACE-Step, Wan2.2) are **not started by default**. They are started on-demand when needed:
 
-- **ACE-Step-1.5**: `CUDA_VISIBLE_DEVICES=0`
-- **Wan2.2**: `CUDA_VISIBLE_DEVICES=0` (sequential execution or model offloading)
+```bash
+# Start ACE-Step (stops Wan2.2 if running)
+/opt/scripts/gpu-on-demand.sh start-ace-step
 
-## Prerequisites
+# Start Wan2.2 (stops ACE-Step if running)
+/opt/scripts/gpu-on-demand.sh start-wan22
 
-### Local Machine
+# Stop services to free GPU memory
+/opt/scripts/gpu-on-demand.sh stop-ace-step
+/opt/scripts/gpu-on-demand.sh stop-wan22
 
-- **Terraform** >= 1.5.0
-- **AWS CLI** configured with credentials
-- **SSH Key** at `~/babaNaTrue/ema-practice.pem`
+# Check status
+/opt/scripts/gpu-on-demand.sh status
+```
 
-### AWS Requirements
+### Mutual Exclusion
 
-- AWS account with g5.4xlarge quota
-- SSH key pair uploaded to AWS (public key at `infra/keys/ema-practice.pub`)
-- Domain name (optional, for HTTPS)
+Systemd `Conflicts=` directive ensures ACE-Step and Wan2.2 never run simultaneously:
+
+```ini
+# ace-step-1.5.service
+Conflicts=wan22.service
+
+# wan22.service
+Conflicts=ace-step-1.5.service
+```
+
+### GPU Memory Allocation
+
+| Service | Model | VRAM | Configuration |
+|---------|-------|------|---------------|
+| ACE-Step 1.5 | acestep-v15-turbo + 1.7B LLM | ~7GB | CPU offload enabled |
+| Wan2.2 | Wan2.2-T2V-A14B | ~15-18GB | Model offload enabled |
+
+**Total GPU**: 22GB VRAM (A10G)
+
+### Models Used
+
+**ACE-Step 1.5**:
+- Main model: `acestep-v15-turbo` (music generation)
+- LLM: `acestep-5Hz-lm-1.7B` (lyrics understanding)
+- VAE: bundled with main model
+- Total: ~10GB download
+
+**Wan2.2**:
+- Model: `Wan2.2-T2V-A14B` (text-to-video)
+- Size: ~118GB download
+
+## Model Persistence
+
+Models are stored on a persistent EBS volume:
+
+```
+/opt/app/            → Application code (destroyed with instance)
+/opt/models/         → Persistent EBS volume (PRESERVED)
+  ├── acestep/       → ACE-Step models (~10GB)
+  │   ├── acestep-v15-turbo/
+  │   ├── acestep-5Hz-lm-1.7B/
+  │   ├── vae/
+  │   └── config.json
+  └── Wan2.2-T2V-A14B/ → Wan2.2 model (~118GB)
+```
 
 ## Quick Start
 
@@ -118,15 +140,8 @@ GPU isolation is enforced via `CUDA_VISIBLE_DEVICES`:
 
 ```bash
 cd infra
-TFVARS_FILE=terraform-g5.tfvars ./scripts/provision.sh
+./scripts/provision.sh
 ```
-
-This will:
-- Create VPC, subnets, security groups
-- Launch EC2 g5.4xlarge instance
-- Allocate Elastic IP
-- Clone repository to EC2
-- Save EC2 IP to `.ec2_ip`
 
 ### 2. Start Applications
 
@@ -134,108 +149,125 @@ This will:
 ./scripts/start-apps.sh
 ```
 
-### 3. Setup SSL (Optional)
+This will:
+- Install dependencies
+- Download essential models
+- Configure nginx
+- Start nginx and ace-step-ui (always running)
+- **NOT** start GPU services (on-demand only)
+
+### 3. Start GPU Service When Needed
 
 ```bash
-./scripts/setup-ssl-dns.sh
+# On EC2 instance:
+sudo systemctl start ace-step-1.5   # For music generation
+# OR
+sudo systemctl start wan22           # For video generation
+
+# Or use the on-demand script:
+/opt/scripts/gpu-on-demand.sh start-ace-step
 ```
 
-## Directory Structure
+## Service Management
 
+### Always-Running Services
+
+```bash
+# Status
+sudo systemctl status nginx
+sudo systemctl status ace-step-ui
+
+# Logs
+tail -f /opt/logs/nginx-error.log
+tail -f /opt/logs/ace-step-ui.log
 ```
-infra/
-+-- terraform/
-|   +-- main.tf
-|   +-- vpc.tf
-|   +-- security.tf
-|   +-- iam.tf
-|   +-- ec2.tf
-|   +-- user_data_single.sh
-|   +-- variables.tf
-|   +-- outputs.tf
-|   +-- terraform.tfvars          # Default (g5.4xlarge)
-|   +-- terraform-g5.tfvars      # g5.4xlarge specific
-|
-+-- scripts/
-|   +-- provision.sh
-|   +-- start-apps.sh
-|   +-- stop-apps.sh
-|   +-- update-code.sh
-|   +-- restart-apps.sh
-|   +-- destroy.sh
-|   +-- setup-ssl-dns.sh
-|
-+-- configs/
-|   +-- nginx/
-|   |   +-- nginx.conf
-|   +-- systemd/
-|   |   +-- ace-step-1.5.service
-|   |   +-- wan22.service
-|   |   +-- ace-step-ui.service
-|   +-- env/
-|       +-- ace-step-1.5.env
-|       +-- wan22.env
-|       +-- ace-step-ui.env
-|
-+-- keys/
-|   +-- ema-practice.pub
-|
-+-- aws-credentials.env         # (gitignored)
-+-- .ec2_ip                     # (created by provision.sh)
-+-- README.md
+
+### On-Demand GPU Services
+
+```bash
+# Start ACE-Step for music generation
+sudo systemctl start ace-step-1.5
+# Wait for models to load (~30s), then check health:
+curl http://localhost:8001/health
+
+# Start Wan2.2 for video generation
+sudo systemctl start wan22
+
+# Stop to free GPU memory
+sudo systemctl stop ace-step-1.5
+sudo systemctl stop wan22
+```
+
+### GPU On-Demand Script
+
+```bash
+# View current status
+/opt/scripts/gpu-on-demand.sh status
+
+# Start service (stops other if running)
+/opt/scripts/gpu-on-demand.sh start-ace-step
+/opt/scripts/gpu-on-demand.sh start-wan22
+
+# Stop services
+/opt/scripts/gpu-on-demand.sh stop-ace-step
+/opt/scripts/gpu-on-demand.sh stop-wan22
 ```
 
 ## Configuration
 
-### Environment Variables
+### ACE-Step 1.5 Service
 
-Edit `.env` files in `configs/env/`:
+```ini
+# /etc/systemd/system/ace-step-1.5.service
+Environment="ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-1.7B"
+Environment="ACESTEP_NO_INIT=true"          # Lazy load models
+Environment="ACESTEP_OFFLOAD_TO_CPU=true"   # Free GPU when idle
+Environment="ACESTEP_OFFLOAD_DIT_TO_CPU=true"
+ExecStart=... acestep-api --host 127.0.0.1 --port 8001 --lm-model-path acestep-5Hz-lm-1.7B
+```
+
+### ACE-Step UI Environment
 
 ```bash
-# ACE-Step-1.5 (turbo models for 24GB VRAM)
-CUDA_VISIBLE_DEVICES=0
-ACESTEP_CONFIG_PATH=acestep-v15-turbo
-ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-1.7B
-
-# Wan2.2 (GGUF quantized model)
-CUDA_VISIBLE_DEVICES=0
-MODEL=wan2.2-14b-t2v-gguf-q6
-
-# ACE-Step UI
+# /opt/app/music/ace-step-ui/.env
 PORT=3001
+NODE_ENV=production
 ACESTEP_API_URL=http://127.0.0.1:8001
+WAN22_API_URL=http://127.0.0.1:8080
+GPU_ON_DEMAND=true
+GPU_ON_DEMAND_SCRIPT=/opt/scripts/gpu-on-demand.sh
+GPU_IDLE_TIMEOUT=300
 ```
 
 ## Monitoring
 
-### SSH into Instance
+### SSH Access
 
 ```bash
-ssh -i ~/babaNaTrue/ema-practice.pem ec2-user@$(cat .ec2_ip)
+ssh -i ~/babaNaTrue/ema-practice.pem ubuntu@$(cat .ec2_ip)
 ```
 
-### Check Service Status
+### Check Status
 
 ```bash
-sudo systemctl status ace-step-1.5
-sudo systemctl status wan22
-sudo systemctl status ace-step-ui
-sudo systemctl status nginx
+# Services
+systemctl status nginx ace-step-ui ace-step-1.5 wan22
+
+# GPU
+nvidia-smi
+watch -n 1 nvidia-smi
+
+# On-demand status
+/opt/scripts/gpu-on-demand.sh status
 ```
 
-### View Logs
+### Logs
 
 ```bash
 tail -f /opt/logs/ace-step-1.5.log
+tail -f /opt/logs/ace-step-1.5-error.log
 tail -f /opt/logs/wan22.log
 tail -f /opt/logs/ace-step-ui.log
-```
-
-### GPU Status
-
-```bash
-nvidia-smi
-watch -n 1 nvidia-smi
 ```
 
 ## Common Operations
@@ -244,38 +276,97 @@ watch -n 1 nvidia-smi
 
 ```bash
 ./scripts/update-code.sh
-./scripts/restart-apps.sh
+sudo systemctl restart ace-step-ui
 ```
 
 ### Restart Services
 
 ```bash
-./scripts/restart-apps.sh
+# Restart always-running services
+sudo systemctl restart nginx ace-step-ui
+
+# GPU services start on-demand
 ```
 
-### Stop/Start Services
+### Add New Model
 
 ```bash
-./scripts/stop-apps.sh
-./scripts/start-apps.sh
-```
+# Download ACE-Step models
+cd /opt/app/music/ACE-Step-1.5
+ACESTEP_CHECKPOINTS_DIR=/opt/models/acestep uv run acestep-download --model <model-name>
 
-### Destroy Infrastructure
-
-```bash
-./scripts/destroy.sh
+# Wan2.2 requires manual huggingface-cli download
 ```
 
 ## Cost Considerations
 
 - **g5.4xlarge**: ~$1.63/hour in us-east-1
-- **EBS volume**: 500GB = ~$50/month
-- **Elastic IP**: Free when attached to running instance
-- **Data transfer**: Variable based on usage
+- **EBS volume**: 200GB = ~$20/month
+- **GPU services only run when needed** (saves compute costs)
 
-## License
+## Troubleshooting
 
-This infrastructure configuration is provided as-is for deploying open-source AI models.
+### GPU Services Won't Start
+
+```bash
+# Check if other GPU service is running
+systemctl is-active ace-step-1.5 wan22
+
+# Check GPU memory
+nvidia-smi
+
+# Check logs
+journalctl -u ace-step-1.5 -n 50
+journalctl -u wan22 -n 50
+```
+
+### Models Not Loading
+
+```bash
+# Check model directories
+ls -la /opt/models/acestep/
+ls -la /opt/models/Wan2.2-T2V-A14B/
+
+# Check disk space
+df -h
+```
+
+### Nginx Errors
+
+```bash
+# Test config
+sudo nginx -t
+
+# Check error log
+tail -f /opt/logs/nginx-error.log
+```
+
+## Directory Structure
+
+```
+infra/
+├── terraform/
+│   ├── main.tf
+│   ├── vpc.tf
+│   ├── security.tf
+│   ├── ec2.tf
+│   └── ...
+├── scripts/
+│   ├── provision.sh
+│   ├── start-apps.sh
+│   ├── stop-apps.sh
+│   ├── destroy.sh
+│   ├── gpu-on-demand.sh      # On-demand GPU service management
+│   └── gpu-resource-manager.sh
+├── configs/
+│   ├── nginx/
+│   │   └── nginx.conf
+│   └── systemd/
+│       ├── ace-step-1.5.service
+│       ├── wan22.service
+│       └── ace-step-ui.service
+└── .ec2_ip
+```
 
 ## Credits
 
