@@ -7,6 +7,7 @@ import { generateUUID } from '../db/sqlite.js';
 import { config } from '../config/index.js';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth.js';
 import { getGradioClient } from '../services/gradio-client.js';
+import { ensureAceStepRunning, resetIdleTimer } from '../services/gpu-service.js';
 import {
   generateMusicViaAPI,
   getJobStatus,
@@ -336,6 +337,18 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
       ditModel,
     };
 
+    // Ensure ACE-Step GPU service is running (on-demand)
+    try {
+      await ensureAceStepRunning();
+    } catch (gpuError) {
+      console.error('Failed to start ACE-Step GPU service:', gpuError);
+      res.status(503).json({ 
+        error: 'ACE-Step service is starting up. Please try again in a moment.',
+        retryAfter: 30 
+      });
+      return;
+    }
+
     // Create job record in database
     const localJobId = generateUUID();
     await pool.query(
@@ -387,6 +400,9 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
 
     // If job is still running, check ACE-Step status
     if (['pending', 'queued', 'running'].includes(job.status) && job.acestep_task_id) {
+      // Reset idle timer while user is waiting
+      resetIdleTimer();
+      
       try {
         const aceStatus = await getJobStatus(job.acestep_task_id);
 

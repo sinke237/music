@@ -5,6 +5,7 @@ import { pool } from '../db/pool.js';
 import { generateUUID } from '../db/sqlite.js';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth.js';
 import { startWanJob } from '../services/wan.js';
+import { ensureWan22Running, resetIdleTimer } from '../services/gpu-service.js';
 
 const router = Router();
 
@@ -29,6 +30,18 @@ router.post('/generate', authMiddleware, upload.single('image'), async (req: Aut
     if (!prompt) {
       console.log('[Wan Route] ERROR: Prompt is required');
       res.status(400).json({ error: 'Prompt is required' });
+      return;
+    }
+
+    // Ensure Wan2.2 GPU service is running (on-demand)
+    try {
+      await ensureWan22Running();
+    } catch (gpuError) {
+      console.error('Failed to start Wan2.2 GPU service:', gpuError);
+      res.status(503).json({ 
+        error: 'Wan2.2 service is starting up. Please try again in a moment.',
+        retryAfter: 60 
+      });
       return;
     }
 
@@ -75,6 +88,9 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
       res.status(403).json({ error: 'Access denied' });
       return;
     }
+
+    // Reset idle timer while user is waiting
+    resetIdleTimer();
 
     res.json({
       id: job.id,
